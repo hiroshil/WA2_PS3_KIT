@@ -11,90 +11,6 @@ EBOOT_OFFSET = 0x10000
 WA2_EBOOT101_INDEX = 0x10765C
 YINFU_UNICODE = '\u266a' # Music char
 
-def load_tbl(tbl_path: str) -> dict:
-    tbl = {}
-    if not os.path.exists(tbl_path):
-        print(f"Warning: TBL file '{tbl_path}' not found. Translation mapping might fail.", file=sys.stderr)
-        return tbl
-        
-    with codecs.open(tbl_path, "r", encoding="utf-16") as f:
-        for line in f:
-            line = line.strip()
-            if not line or "=" not in line:
-                continue
-            code_str, char = line.split("=", 1)
-            try:
-                code = int(code_str, 16)
-                tbl[char] = code
-            except ValueError:
-                continue
-    return tbl
-
-def replace_zhuyin_txt(txt: str, tbl: dict) -> bytes:
-    out = bytearray()
-    for char in txt:
-        if char == '\u4f93' or char == '♪':
-            char = YINFU_UNICODE
-            
-        if char in tbl:
-            code = tbl[char]
-            if code < 0x100:
-                out.extend(struct.pack("B", code))
-            else:
-                out.extend(struct.pack(">H", code))
-        else:
-            # Map unrecognized to space
-            out.extend(struct.pack(">H", tbl.get('\u3000', 0x8140)))
-    return bytes(out)
-
-def replace_txt_content(txt: str, tbl: dict) -> bytes:
-    # Splits by commas
-    parts = txt.split(',')
-    new_parts = []
-    
-    for part in parts:
-        # Check if it is a filename/command
-        part_lower = part.lower()
-        if (part_lower.endswith(".tga") or part_lower.endswith(".amp") or 
-            part_lower.endswith(".ani") or part_lower.endswith(".tga") or 
-            part_lower.endswith(".amp") or part_lower.endswith(".ani")):
-            # Keep raw CP932
-            new_parts.append(part.encode('cp932', errors='ignore'))
-        else:
-            out = bytearray()
-            cur = 0
-            while cur < len(part):
-                char = part[cur]
-                if char == '\u4f93' or char == '♪':
-                    char = YINFU_UNICODE
-                    
-                if char == '|':
-                    # Ruby tag
-                    pos = part.find('>', cur + 1)
-                    if pos > cur:
-                        zhuyin_bytes = replace_zhuyin_txt(part[cur+1:pos], tbl)
-                        out.extend(b"|" + zhuyin_bytes + b">")
-                        cur = pos + 1
-                        continue
-                        
-                if char in tbl:
-                    code = tbl[char]
-                    if code < 0x100:
-                        out.extend(struct.pack("B", code))
-                    else:
-                        out.extend(struct.pack(">H", code))
-                else:
-                    if ord(char) < 0x80:
-                        # Keep ASCII
-                        out.extend(char.encode('ascii'))
-                    else:
-                        # Map to space
-                        out.extend(struct.pack(">H", tbl.get('\u3000', 0x8140)))
-                cur += 1
-            new_parts.append(bytes(out))
-            
-    return b','.join(new_parts)
-
 # ==============================================================================
 # Extract EBOOT Command
 # ==============================================================================
@@ -193,7 +109,7 @@ def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
 # Inject EBOOT Command
 # ==============================================================================
 
-def inject_eboot(eboot_path: str, input_dir: str, tbl_path: str = "scripts_all.tbl"):
+def inject_eboot(eboot_path: str, input_dir: str):
     print(f"Injecting into EBOOT: {eboot_path} from {input_dir}")
     
     meta_path = os.path.join(input_dir, "eboot_meta.json")
@@ -209,11 +125,6 @@ def inject_eboot(eboot_path: str, input_dir: str, tbl_path: str = "scripts_all.t
     
     with open(eboot_path, "rb") as f:
         eboot_buf = bytearray(f.read())
-        
-    tbl = {}
-    if clean_mode:
-        print(f"Loading character mapping table: {tbl_path}")
-        tbl = load_tbl(tbl_path)
         
     pos = WA2_EBOOT101_INDEX
     cur_pos = 0
@@ -249,8 +160,9 @@ def inject_eboot(eboot_path: str, input_dir: str, tbl_path: str = "scripts_all.t
         if clean_mode and norm_name.endswith(".txt") and os.path.exists(mod_txt_path):
             with codecs.open(mod_txt_path, "r", encoding="utf-16") as f:
                 text_content = f.read()
-            # Map CP936 to CP932 custom tbl bytes
-            mapped_bytes = replace_txt_content(text_content, tbl)
+            # Replace custom music note unicode and encode to CP932
+            text_content = text_content.replace('\u4f93', '♪')
+            mapped_bytes = text_content.encode('cp932', errors='replace')
             new_uncomp = len(mapped_bytes)
             # Compress
             comp_data = wa2_elzma.compress_data(mapped_bytes)
@@ -456,7 +368,7 @@ def main():
     if args.command == "extract":
         extract_eboot(args.eboot_file, args.output_dir, args.clean)
     elif args.command == "inject":
-        inject_eboot(args.eboot_file, args.input_dir, args.tbl)
+        inject_eboot(args.eboot_file, args.input_dir)
     elif args.command == "patch":
         patch_eboot(args.eboot_file, args.charset_num, args.font2_bin, args.font2_num, args.warning_png)
 

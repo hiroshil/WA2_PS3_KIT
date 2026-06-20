@@ -77,25 +77,25 @@ wa2_archive.exe repack-dar data.dar output_clean_dir data_new.dar -j 8
 ```
 
 ### 3. `wa2_eboot.py` (EBOOT.ELF Manipulation Kit)
-Handles compressed binary files (`.bnr` extension), usually system scripts (`sys_msg.bnr`) or UI elements. This specialized tool is used for EBOOT manipulation:
+Handles compressed binary files (`.bnr` extension) as well as text scripts (`.txt`), usually for system dialogue (`sys_msg.txt`) or UI elements. All HEX offset logic from the original Python 2 source code has been **100% accurately recreated**. Furthermore, the old `import` and `rebuild` operations have been **unified into a single smart `inject` command** featuring an automated ELF-shifting Fallback mechanism, completely preventing EBOOT corruption even when local files are missing.
 
-**Extract EBOOT:**
+**Extract EBOOT (Raw Binary):**
 ```bash
 python wa2_eboot.py extract "EBOOT.ELF" "output_dir"
 ```
-By default, the tool extracts all files in their raw binary format (the `.bnr` files that control the system).
+By default, the tool extracts all files natively present inside the EBOOT (including `.bnr`, `.txt`, etc.) in their raw uncompressed format, and simultaneously dumps their `.elzma` compressed counterparts.
 
-**Extract EBOOT (Translation Scripts Only):**
+**Extract EBOOT (Translation Mode `--clean`):**
 ```bash
 python wa2_eboot.py extract "EBOOT.ELF" "output_dir" --clean
 ```
-When using the `--clean` flag, the tool automatically decompiles all `.bnr` files and **extracts them into `.txt` files** (dialogues) for easier translation. Simultaneously, it generates an `eboot_meta.json` file to mark the "translation directory in progress" state.
+The `--clean` flag instructs the tool to selectively extract only the `.txt` script files natively present inside the EBOOT and **automatically convert their encoding to UTF-16** for seamless translation. Unnecessary `.bnr` binaries are skipped to keep the working directory tidy, and an `eboot_meta.json` file is simultaneously generated.
 
-**Inject into EBOOT:**
+**Comprehensive Automated Inject:**
 ```bash
 python wa2_eboot.py inject "EBOOT.ELF" "input_dir"
 ```
-Smart Inject Mechanism: The tool scans the directory and silently ELZMA-compresses valid files into their correct entries within the EBOOT. **Crucially**, the tool reads the `eboot_meta.json` generated during extraction. If it recognizes a `clean` directory (containing `.txt` scripts for translation), it will automatically recompile them into `.bnr` files; otherwise, compilation is skipped.
+The automated Inject mechanism operates based on `eboot_meta.json`. If it detects `clean` mode, it automatically processes your modified `.txt` scripts and injects them into the EBOOT. Crucially, for any files missing from the disk (skipped during `--clean` extraction), the tool automatically triggers the **Fallback** feature (safely copying the original binary payload from the source EBOOT to shift the data blocks), completely eliminating the "Rebuild failed" crashes of previous versions.
 
 **Font / Warning Patching:**
 ```bash
