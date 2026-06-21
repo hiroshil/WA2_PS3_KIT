@@ -36,20 +36,21 @@ def compress_data(buf: bytes) -> bytes:
         pos += block_size
         remain -= block_size
         
-        # Compress block raw payload
-        compressor = lzma.LZMACompressor(format=lzma.FORMAT_RAW, filters=filters)
-        dst = compressor.compress(block) + compressor.flush()
+        import pylzma
+        dst_full = pylzma.compress(block, dictionary=14, literalContextBits=3, literalPosBits=0, posBits=2, eos=0)
+        dst = dst_full[5:]
+        
+        # comp_size is EXACTLY the length of the compressed payload
+        unpadded_dst_len = len(dst)
+        comp_size = unpadded_dst_len
+        aligned_size = (comp_size + 31) // 16 * 16
+        pad_len = aligned_size - comp_size
+        dst += b"\x00" * pad_len
         
         # Build block header: uncomp_size (4B), comp_size (4B), properties (8B)
-        block_head = struct.pack("<II8s", block_size, len(dst), b"\x5d\x00\x40\x00\x00\x00\x00\x00")
+        block_head = struct.pack("<II8s", block_size, comp_size, b"\x5d\x00\x40\x00\x00\x00\x00\x00")
         block_data = block_head + dst
         
-        # Padding to multiple of 16 bytes
-        pad = len(block_data)
-        pad = (pad + 0xf) // 0x10 * 0x10 - pad
-        if pad > 0:
-            block_data += b"\x00" * pad
-            
         data.extend(block_data)
         
     return struct.pack("<I", size) + bytes(data)
@@ -102,6 +103,7 @@ def decompress_data(buf: bytes) -> bytes:
             
         lzma_params = buf[pos+8:pos+13]
         payload_start = pos + 16
+        # block_comp_size is EXACTLY the payload length
         payload_end = payload_start + block_comp_size
         
         if payload_end > len(buf):

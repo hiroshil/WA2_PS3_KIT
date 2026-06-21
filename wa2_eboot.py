@@ -8,7 +8,7 @@ import codecs
 from utils import wa2_elzma
 
 EBOOT_OFFSET = 0x10000
-WA2_EBOOT101_INDEX = 0x10765C
+WA2_EBOOT101_INDEX = 0x106EDC
 YINFU_UNICODE = '\u266a' # Music char
 
 # ==============================================================================
@@ -55,9 +55,114 @@ def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
             
         print(f"File: {norm_name} (compressed={block_size}, uncompressed={uncomp_size})")
         
-        # Payload offset in EBOOT
-        payload_offset = data_offset - EBOOT_OFFSET
-        comp_payload = eboot_data[payload_offset:payload_offset+block_size]
+        # Extract payload
+        cpos = data_offset - EBOOT_OFFSET
+        comp_payload = eboot_data[cpos:cpos+uncomp_size]
+        
+        # Decompress
+        decomp_payload = wa2_elzma.decompress_data(comp_payload)
+        
+        # Decide if we write this file
+        is_txt = norm_name.endswith(".txt")
+        
+        if not clean_mode or is_txt:
+            # Write decompressed file
+            if clean_mode and is_txt:
+                # Convert to UTF-16
+                text = decomp_payload.decode('cp932', errors='replace')
+                out_path = os.path.join(eboot_dir, norm_name)
+                with codecs.open(out_path, "w", encoding="utf-16") as out_f:
+                    out_f.write(text)
+            else:
+                # Write raw binary file
+                out_path = os.path.join(eboot_dir, norm_name)
+                with open(out_path, "wb") as out_f:
+                    out_f.write(decomp_payload)
+                    
+                # Write .elzma file
+                elzma_path = out_path + ".elzma"
+                with open(elzma_path, "wb") as out_f:
+                    out_f.write(struct.pack("<I", uncomp_size) + comp_payload)
+                    
+        meta_entries.append({
+            "name": name,
+            "norm_name": norm_name,
+            "uncomp_size": uncomp_size,
+            "block_size": block_size,
+            "data_offset": data_offset,
+            "name_offset": name_offset
+        })
+        
+        pos += 16
+        
+    # Write metadata file
+    meta_path = os.path.join(output_dir, "eboot_meta.json")
+    with open(meta_path, "w", encoding="utf-8") as meta_f:
+        json.dump({
+            "mode": "clean" if clean_mode else "raw",
+            "files": meta_entries
+        }, meta_f, indent=2)
+        
+# -*- coding: utf-8 -*-
+import os
+import sys
+import struct
+import json
+import argparse
+import codecs
+from utils import wa2_elzma
+
+EBOOT_OFFSET = 0x10000
+WA2_EBOOT101_INDEX = 0x106EDC
+YINFU_UNICODE = '\u266a' # Music char
+
+# ==============================================================================
+# Extract EBOOT Command
+# ==============================================================================
+
+def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
+    print(f"Extracting EBOOT: {eboot_path} -> {output_dir} (Clean Mode: {clean_mode})")
+    
+    eboot_dir = os.path.join(output_dir, "eboot")
+    os.makedirs(eboot_dir, exist_ok=True)
+    
+    with open(eboot_path, "rb") as f:
+        eboot_data = f.read()
+        
+    if len(eboot_data) < WA2_EBOOT101_INDEX or eboot_data[0:4] != b"\x7FELF":
+        print("Error: Invalid EBOOT.ELF file.", file=sys.stderr)
+        sys.exit(1)
+        
+    pos = WA2_EBOOT101_INDEX
+    meta_entries = []
+    
+    while True:
+        entry = eboot_data[pos:pos+16]
+        name_offset, data_offset, uncomp_size, block_size = struct.unpack(">4I", entry)
+        if name_offset == 0:
+            break
+            
+        # Extract name
+        cpos = name_offset - EBOOT_OFFSET
+        name_bytes = bytearray()
+        while True:
+            c = eboot_data[cpos]
+            if c == 0:
+                break
+            name_bytes.append(c)
+            cpos += 1
+        name = name_bytes.decode('ascii')
+        
+        # Normalize name
+        norm_name = name
+        if norm_name[-4:-3] == '_':
+            norm_name = norm_name[:-4] + '.' + norm_name[-3:]
+            
+        print(f"File: {norm_name} (compressed={block_size}, uncompressed={uncomp_size})")
+        
+        # Extract payload
+        cpos = data_offset - EBOOT_OFFSET
+        comp_payload = eboot_data[cpos:cpos+uncomp_size]
         
         # Decompress
         decomp_payload = wa2_elzma.decompress_data(comp_payload)
@@ -109,8 +214,8 @@ def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
 # Inject EBOOT Command
 # ==============================================================================
 
-def inject_eboot(eboot_path: str, input_dir: str):
-    print(f"Injecting into EBOOT: {eboot_path} from {input_dir}")
+def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str, clean_mode: bool = False):
+    print(f"Injecting into EBOOT: {out_eboot} from template {in_eboot} with files from {input_dir}")
     
     meta_path = os.path.join(input_dir, "eboot_meta.json")
     if not os.path.exists(meta_path):
@@ -120,11 +225,13 @@ def inject_eboot(eboot_path: str, input_dir: str):
     with open(meta_path, "r", encoding="utf-8") as meta_f:
         meta_data = json.load(meta_f)
         
-    clean_mode = meta_data.get("mode") == "clean"
+    if "mode" in meta_data:
+        clean_mode = meta_data["mode"] == "clean"
     files = meta_data["files"]
     
-    with open(eboot_path, "rb") as f:
-        eboot_buf = bytearray(f.read())
+    with open(in_eboot, "rb") as f:
+        eboot_data = f.read()
+        eboot_buf = bytearray(eboot_data)
         
     pos = WA2_EBOOT101_INDEX
     cur_pos = 0
@@ -148,6 +255,15 @@ def inject_eboot(eboot_path: str, input_dir: str):
             
         end_pos = orig_offset - EBOOT_OFFSET + total_block
         
+        # Align write position
+        if cur_pos == 0:
+            cur_pos = orig_offset - EBOOT_OFFSET
+        else:
+            aligned_pos = (cur_pos + 63) & ~63
+            if aligned_pos > cur_pos:
+                eboot_buf[cur_pos:aligned_pos] = b"\x00" * (aligned_pos - cur_pos)
+            cur_pos = aligned_pos
+            
         # Check for modified file
         payload_written = False
         new_uncomp = orig_uncomp
@@ -155,11 +271,22 @@ def inject_eboot(eboot_path: str, input_dir: str):
         
         mod_txt_path = os.path.join(input_dir, "eboot", norm_name)
         mod_elzma_path = os.path.join(input_dir, "eboot", norm_name + ".elzma")
-        
+
         # 1. Try clean mode translated .txt
         if clean_mode and norm_name.endswith(".txt") and os.path.exists(mod_txt_path):
-            with codecs.open(mod_txt_path, "r", encoding="utf-16") as f:
-                text_content = f.read()
+            with open(mod_txt_path, "rb") as f:
+                mod_data = f.read()
+            if mod_data.startswith(b'\xff\xfe'):
+                text_content = mod_data.decode("utf-16")
+            elif mod_data.startswith(b'\xfe\xff'):
+                text_content = mod_data.decode("utf-16-be")
+            elif mod_data.startswith(b'\xef\xbb\xbf'):
+                text_content = mod_data.decode("utf-8-sig")
+            else:
+                try:
+                    text_content = mod_data.decode("utf-8")
+                except UnicodeDecodeError:
+                    text_content = mod_data.decode("cp932", errors="replace")
             # Replace custom music note unicode and encode to CP932
             text_content = text_content.replace('\u4f93', '♪')
             mapped_bytes = text_content.encode('cp932', errors='replace')
@@ -169,9 +296,6 @@ def inject_eboot(eboot_path: str, input_dir: str):
             payload = comp_data[4:] # Strip 4-byte prefix
             new_comp = len(payload)
             
-            if cur_pos == 0:
-                cur_pos = orig_offset - EBOOT_OFFSET
-                
             eboot_buf[cur_pos:cur_pos+new_comp] = payload
             payload_written = True
             print(f"Injecting modified text: {norm_name} ({orig_uncomp}->{new_uncomp} bytes)")
@@ -184,9 +308,6 @@ def inject_eboot(eboot_path: str, input_dir: str):
             payload = comp_file_data[4:]
             new_comp = len(payload)
             
-            if cur_pos == 0:
-                cur_pos = orig_offset - EBOOT_OFFSET
-                
             eboot_buf[cur_pos:cur_pos+new_comp] = payload
             payload_written = True
             print(f"Injecting modified elzma: {norm_name} ({orig_block}->{new_comp} bytes)")
@@ -194,13 +315,10 @@ def inject_eboot(eboot_path: str, input_dir: str):
         # 3. Fallback: Copy original compressed payload from EBOOT.ELF itself
         if not payload_written:
             orig_payload_off = orig_offset - EBOOT_OFFSET
-            payload = eboot_buf[orig_payload_off:orig_payload_off+orig_block]
+            payload = eboot_data[orig_payload_off:orig_payload_off+orig_block]
             
-            if cur_pos == 0:
-                cur_pos = orig_payload_off
-                
-            # Align write position
             eboot_buf[cur_pos:cur_pos+orig_block] = payload
+            new_uncomp = orig_uncomp
             new_uncomp = orig_uncomp
             new_comp = orig_block
             payload_written = True
@@ -212,14 +330,16 @@ def inject_eboot(eboot_path: str, input_dir: str):
         cur_pos += new_comp
         pos += 16
         
-    if cur_pos > end_pos:
-        print(f"Error: Injection failed. New size exceeds ELF limit! ({cur_pos} > {end_pos})", file=sys.stderr)
+    # The warning PNG starts at absolute file offset 0x660040. We can safely grow payloads into the padding before it.
+    max_payload_limit = 0x660040
+    if cur_pos > max_payload_limit:
+        print(f"Error: Injection failed. New size exceeds ELF limit! ({cur_pos} > {max_payload_limit})", file=sys.stderr)
         sys.exit(1)
         
-    print(f"Check ELF Ok: {cur_pos} <= {end_pos}")
+    print(f"Check ELF Ok: {cur_pos} <= {max_payload_limit}")
     
     # Save back to file
-    with open(eboot_path, "wb") as f:
+    with open(out_eboot, "wb") as f:
         f.write(eboot_buf)
         
     print("EBOOT Injection completed successfully.")
@@ -229,8 +349,6 @@ def inject_eboot(eboot_path: str, input_dir: str):
 # ==============================================================================
 
 def patch_eboot(eboot_path: str, charset_num: int, font2_bin_path: str, font2_num: int, warning_png_path: str):
-    print(f"Patching EBOOT: {eboot_path} with charset={charset_num}, font2={font2_num}")
-    
     with open(eboot_path, "rb") as f:
         buf = bytearray(f.read())
         
@@ -351,9 +469,10 @@ def main():
     
     # inject
     inj_parser = subparsers.add_parser("inject", help="Inject modified files back into EBOOT.ELF")
-    inj_parser.add_argument("eboot_file", help="Path to EBOOT.ELF")
+    inj_parser.add_argument("in_eboot", help="Path to input original EBOOT.ELF template")
+    inj_parser.add_argument("out_eboot", help="Path to output modified EBOOT.ELF")
     inj_parser.add_argument("input_dir", help="Directory containing modified files")
-    inj_parser.add_argument("--tbl", default="scripts_all.tbl", help="Character table mapping file (default: scripts_all.tbl)")
+    inj_parser.add_argument("--clean", action="store_true", help="Force clean injection from uncompressed txt files, ignoring existing .elzma files")
     
     # patch
     pat_parser = subparsers.add_parser("patch", help="Patch EBOOT.ELF font and warning data")
@@ -368,7 +487,7 @@ def main():
     if args.command == "extract":
         extract_eboot(args.eboot_file, args.output_dir, args.clean)
     elif args.command == "inject":
-        inject_eboot(args.eboot_file, args.input_dir)
+        inject_eboot(args.in_eboot, args.out_eboot, args.input_dir, clean_mode=args.clean)
     elif args.command == "patch":
         patch_eboot(args.eboot_file, args.charset_num, args.font2_bin, args.font2_num, args.warning_png)
 
