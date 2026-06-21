@@ -2,7 +2,6 @@
 import os
 import sys
 import struct
-import lzma
 import argparse
 
 UNCOMP_BLOCK_SIZE = 0x10000
@@ -12,19 +11,6 @@ def compress_data(buf: bytes) -> bytes:
     remain = size
     pos = 0
     data = bytearray()
-    
-    filters = [
-        {
-            "id": lzma.FILTER_LZMA1,
-            "dict_size": 1 << 14,
-            "lc": 3,
-            "lp": 0,
-            "pb": 2,
-            "mode": lzma.MODE_NORMAL,
-            "mf": lzma.MF_BT4,
-            "nice_len": 273
-        }
-    ]
     
     while remain > 0:
         if remain > UNCOMP_BLOCK_SIZE:
@@ -36,8 +22,12 @@ def compress_data(buf: bytes) -> bytes:
         pos += block_size
         remain -= block_size
         
+        # Compress block raw payload using pylzma
         import pylzma
+        # pylzma.compress returns a 5-byte properties header + compressed data
         dst_full = pylzma.compress(block, dictionary=14, literalContextBits=3, literalPosBits=0, posBits=2, eos=0)
+        
+        prop_header = dst_full[:5]
         dst = dst_full[5:]
         
         # comp_size is EXACTLY the length of the compressed payload
@@ -48,7 +38,8 @@ def compress_data(buf: bytes) -> bytes:
         dst += b"\x00" * pad_len
         
         # Build block header: uncomp_size (4B), comp_size (4B), properties (8B)
-        block_head = struct.pack("<II8s", block_size, comp_size, b"\x5d\x00\x40\x00\x00\x00\x00\x00")
+        # We pad the 5-byte properties from pylzma to 8 bytes with zeros
+        block_head = struct.pack("<II8s", block_size, comp_size, prop_header + b"\x00\x00\x00")
         block_data = block_head + dst
         
         data.extend(block_data)
@@ -111,28 +102,11 @@ def decompress_data(buf: bytes) -> bytes:
             
         payload = buf[payload_start:payload_end]
         
-        # Decode LZMA params
-        prop_byte = lzma_params[0]
-        pb = prop_byte // 45
-        temp = prop_byte - pb * 45
-        lp = temp // 9
-        lc = temp % 9
-        dict_size = struct.unpack("<I", lzma_params[1:5])[0]
-        
-        # Reconstruct filters for raw decompression
-        filters = [
-            {
-                "id": lzma.FILTER_LZMA1,
-                "dict_size": dict_size,
-                "lc": lc,
-                "lp": lp,
-                "pb": pb
-            }
-        ]
-        
         try:
-            decompressor = lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=filters)
-            decompressed_block = decompressor.decompress(payload)
+            import pylzma
+            # pylzma requires the 5-byte properties header prepended to the payload
+            prop_header = lzma_params[:5]
+            decompressed_block = pylzma.decompress(prop_header + payload, maxlength=block_uncomp_size)
             data.extend(decompressed_block)
         except Exception as e:
             print(f"Error decompressing block at offset {pos}: {e}", file=sys.stderr)

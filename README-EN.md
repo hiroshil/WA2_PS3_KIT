@@ -1,6 +1,6 @@
 # WA2 PS3 KIT - Standalone Tools (Modernized Python 3)
 
-The toolset has been completely redesigned and modernized to **Python 3.12**, completely dropping the dependency on Python 2.7 and the obsolete `pylzma` library. Instead, the kit utilizes Python 3's standard `lzma` library, perfectly backward-compatible with Aquaplus's block compression format.
+The toolset has been completely redesigned and modernized to **Python 3.12**, dropping the dependency on Python 2.7. The kit utilizes the `pylzma` library (compiled for Python 3) to handle Aquaplus's block compression format.
 
 ## Standalone Tools
 
@@ -93,7 +93,7 @@ The `--clean` flag instructs the tool to selectively extract only the `.txt` scr
 
 **Comprehensive Automated Inject:**
 ```bash
-python wa2_eboot.py inject "EBOOT.ELF" "input_dir"
+python wa2_eboot.py inject "EBOOT.ELF.org" "EBOOT.ELF" "input_dir"
 ```
 The automated Inject mechanism operates based on `eboot_meta.json`. If it detects `clean` mode, it automatically processes your modified `.txt` scripts and injects them into the EBOOT. Crucially, for any files missing from the disk (skipped during `--clean` extraction), the tool automatically triggers the **Fallback** feature (safely copying the original binary payload from the source EBOOT to shift the data blocks), completely eliminating the "Rebuild failed" crashes of previous versions.
 
@@ -124,6 +124,11 @@ A wrapper communicating with `nvcompress`, `dds2gtf`, and `gtf2dds` to convert P
 - **PNG to DDS:** `python wa2_image.py png2dds image.png [--format -rgb32]`
 - **DDS to GTF:** `python wa2_image.py dds2gtf image.dds`
 - **GTF to DDS:** `python wa2_image.py gtf2dds image.gtf`
+
+### 8. `wa2_text.py` (Text Dumper / Builder)
+A utility to dump text files (typically comma-separated strings) into a human-readable translation format and build them back.
+- **Dump:** `python wa2_text.py dump input.txt output_dir`
+- **Build:** `python wa2_text.py build translated.txt original.txt output.txt`
 
 ### `utils/` Directory
 This directory contains internal files not directly used for game modification.

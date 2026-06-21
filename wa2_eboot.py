@@ -103,118 +103,13 @@ def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
             "files": meta_entries
         }, meta_f, indent=2)
         
-# -*- coding: utf-8 -*-
-import os
-import sys
-import struct
-import json
-import argparse
-import codecs
-from utils import wa2_elzma
-
-EBOOT_OFFSET = 0x10000
-WA2_EBOOT101_INDEX = 0x106EDC
-YINFU_UNICODE = '\u266a' # Music char
-
-# ==============================================================================
-# Extract EBOOT Command
-# ==============================================================================
-
-def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
-    print(f"Extracting EBOOT: {eboot_path} -> {output_dir} (Clean Mode: {clean_mode})")
-    
-    eboot_dir = os.path.join(output_dir, "eboot")
-    os.makedirs(eboot_dir, exist_ok=True)
-    
-    with open(eboot_path, "rb") as f:
-        eboot_data = f.read()
-        
-    if len(eboot_data) < WA2_EBOOT101_INDEX or eboot_data[0:4] != b"\x7FELF":
-        print("Error: Invalid EBOOT.ELF file.", file=sys.stderr)
-        sys.exit(1)
-        
-    pos = WA2_EBOOT101_INDEX
-    meta_entries = []
-    
-    while True:
-        entry = eboot_data[pos:pos+16]
-        name_offset, data_offset, uncomp_size, block_size = struct.unpack(">4I", entry)
-        if name_offset == 0:
-            break
-            
-        # Extract name
-        cpos = name_offset - EBOOT_OFFSET
-        name_bytes = bytearray()
-        while True:
-            c = eboot_data[cpos]
-            if c == 0:
-                break
-            name_bytes.append(c)
-            cpos += 1
-        name = name_bytes.decode('ascii')
-        
-        # Normalize name
-        norm_name = name
-        if norm_name[-4:-3] == '_':
-            norm_name = norm_name[:-4] + '.' + norm_name[-3:]
-            
-        print(f"File: {norm_name} (compressed={block_size}, uncompressed={uncomp_size})")
-        
-        # Extract payload
-        cpos = data_offset - EBOOT_OFFSET
-        comp_payload = eboot_data[cpos:cpos+uncomp_size]
-        
-        # Decompress
-        decomp_payload = wa2_elzma.decompress_data(comp_payload)
-        
-        # Decide if we write this file
-        is_txt = norm_name.endswith(".txt")
-        
-        if not clean_mode or is_txt:
-            # Write decompressed file
-            if clean_mode and is_txt:
-                # Convert to UTF-16
-                text = decomp_payload.decode('cp932', errors='replace')
-                out_path = os.path.join(eboot_dir, norm_name)
-                with codecs.open(out_path, "w", encoding="utf-16") as out_f:
-                    out_f.write(text)
-            else:
-                # Write raw binary file
-                out_path = os.path.join(eboot_dir, norm_name)
-                with open(out_path, "wb") as out_f:
-                    out_f.write(decomp_payload)
-                    
-                # Write .elzma file
-                elzma_path = out_path + ".elzma"
-                with open(elzma_path, "wb") as out_f:
-                    out_f.write(struct.pack("<I", uncomp_size) + comp_payload)
-                    
-        meta_entries.append({
-            "name": name,
-            "norm_name": norm_name,
-            "uncomp_size": uncomp_size,
-            "block_size": block_size,
-            "data_offset": data_offset,
-            "name_offset": name_offset
-        })
-        
-        pos += 16
-        
-    # Write metadata file
-    meta_path = os.path.join(output_dir, "eboot_meta.json")
-    with open(meta_path, "w", encoding="utf-8") as meta_f:
-        json.dump({
-            "mode": "clean" if clean_mode else "raw",
-            "files": meta_entries
-        }, meta_f, indent=2)
-        
     print("EBOOT Extraction completed successfully.")
 
 # ==============================================================================
 # Inject EBOOT Command
 # ==============================================================================
 
-def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str, clean_mode: bool = False):
+def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
     print(f"Injecting into EBOOT: {out_eboot} from template {in_eboot} with files from {input_dir}")
     
     meta_path = os.path.join(input_dir, "eboot_meta.json")
@@ -225,6 +120,7 @@ def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str, clean_mode: bool
     with open(meta_path, "r", encoding="utf-8") as meta_f:
         meta_data = json.load(meta_f)
         
+    clean_mode = False
     if "mode" in meta_data:
         clean_mode = meta_data["mode"] == "clean"
     files = meta_data["files"]
@@ -318,7 +214,6 @@ def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str, clean_mode: bool
             payload = eboot_data[orig_payload_off:orig_payload_off+orig_block]
             
             eboot_buf[cur_pos:cur_pos+orig_block] = payload
-            new_uncomp = orig_uncomp
             new_uncomp = orig_uncomp
             new_comp = orig_block
             payload_written = True
@@ -472,7 +367,6 @@ def main():
     inj_parser.add_argument("in_eboot", help="Path to input original EBOOT.ELF template")
     inj_parser.add_argument("out_eboot", help="Path to output modified EBOOT.ELF")
     inj_parser.add_argument("input_dir", help="Directory containing modified files")
-    inj_parser.add_argument("--clean", action="store_true", help="Force clean injection from uncompressed txt files, ignoring existing .elzma files")
     
     # patch
     pat_parser = subparsers.add_parser("patch", help="Patch EBOOT.ELF font and warning data")
@@ -487,7 +381,7 @@ def main():
     if args.command == "extract":
         extract_eboot(args.eboot_file, args.output_dir, args.clean)
     elif args.command == "inject":
-        inject_eboot(args.in_eboot, args.out_eboot, args.input_dir, clean_mode=args.clean)
+        inject_eboot(args.in_eboot, args.out_eboot, args.input_dir)
     elif args.command == "patch":
         patch_eboot(args.eboot_file, args.charset_num, args.font2_bin, args.font2_num, args.warning_png)
 
