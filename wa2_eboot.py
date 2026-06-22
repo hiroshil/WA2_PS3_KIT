@@ -191,17 +191,19 @@ def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
             payload_written = True
             print(f"Injecting modified text: {norm_name} ({orig_uncomp}->{new_uncomp} bytes)")
             
-        # 2. Try raw mode modified .elzma file
-        elif not clean_mode and os.path.exists(mod_elzma_path):
-            with open(mod_elzma_path, "rb") as f:
-                comp_file_data = f.read()
-            new_uncomp = struct.unpack("<I", comp_file_data[0:4])[0]
-            payload = comp_file_data[4:]
+        # 2. Try raw mode modified decompressed file
+        elif not clean_mode and os.path.exists(os.path.join(input_dir, "eboot", norm_name)):
+            mod_raw_path = os.path.join(input_dir, "eboot", norm_name)
+            with open(mod_raw_path, "rb") as f:
+                raw_data = f.read()
+            new_uncomp = len(raw_data)
+            comp_data = wa2_elzma.compress_data(raw_data)
+            payload = comp_data[4:] # Strip 4-byte prefix
             new_comp = len(payload)
             
             eboot_buf[cur_pos:cur_pos+new_comp] = payload
             payload_written = True
-            print(f"Injecting modified elzma: {norm_name} ({orig_block}->{new_comp} bytes)")
+            print(f"Injecting raw modified file: {norm_name} ({orig_uncomp}->{new_uncomp} uncompressed bytes)")
             
         # 3. Fallback: Copy original compressed payload from EBOOT.ELF itself
         if not payload_written:
