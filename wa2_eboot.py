@@ -79,11 +79,6 @@ def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
                 with open(out_path, "wb") as out_f:
                     out_f.write(decomp_payload)
                     
-                # Write .elzma file
-                elzma_path = out_path + ".elzma"
-                with open(elzma_path, "wb") as out_f:
-                    out_f.write(struct.pack("<I", uncomp_size) + comp_payload)
-                    
         meta_entries.append({
             "name": name,
             "norm_name": norm_name,

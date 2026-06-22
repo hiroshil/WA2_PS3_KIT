@@ -83,7 +83,7 @@ Handles compressed binary files (`.bnr` extension) as well as text scripts (`.tx
 ```bash
 python wa2_eboot.py extract "EBOOT.ELF" "output_dir"
 ```
-By default, the tool extracts all files natively present inside the EBOOT (including `.bnr`, `.txt`, etc.) in their raw uncompressed format, and simultaneously dumps their `.elzma` compressed counterparts.
+By default, the tool extracts all files natively present inside the EBOOT (including `.bnr`, `.txt`, etc.) in their raw uncompressed format so you can edit them directly.
 
 **Extract EBOOT (Translation Mode `--clean`):**
 ```bash
