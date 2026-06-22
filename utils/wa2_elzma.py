@@ -33,8 +33,10 @@ def compress_data(buf: bytes) -> bytes:
         # comp_size is EXACTLY the length of the compressed payload
         unpadded_dst_len = len(dst)
         comp_size = unpadded_dst_len
-        aligned_size = (comp_size + 31) // 16 * 16
-        pad_len = aligned_size - comp_size
+        
+        total_size = 16 + comp_size
+        aligned_total_size = (total_size + 15) // 16 * 16
+        pad_len = aligned_total_size - total_size
         dst += b"\x00" * pad_len
         
         # Build block header: uncomp_size (4B), comp_size (4B), properties (8B)

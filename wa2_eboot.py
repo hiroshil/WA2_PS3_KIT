@@ -57,7 +57,7 @@ def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
         
         # Extract payload
         cpos = data_offset - EBOOT_OFFSET
-        comp_payload = eboot_data[cpos:cpos+uncomp_size]
+        comp_payload = eboot_data[cpos:cpos+block_size]
         
         # Decompress
         decomp_payload = wa2_elzma.decompress_data(comp_payload)
@@ -218,6 +218,13 @@ def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
         
         # Advance write position
         cur_pos += new_comp
+        
+        # Align cur_pos to 64 bytes (0x40) to match original PS3 EBOOT alignment
+        aligned_pos = (cur_pos + 63) // 64 * 64
+        if aligned_pos > cur_pos:
+            eboot_buf[cur_pos:aligned_pos] = b'\x00' * (aligned_pos - cur_pos)
+            cur_pos = aligned_pos
+            
         pos += 16
         
     # The warning PNG starts at absolute file offset 0x660040. We can safely grow payloads into the padding before it.
