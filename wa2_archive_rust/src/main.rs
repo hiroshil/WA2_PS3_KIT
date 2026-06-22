@@ -1069,7 +1069,18 @@ fn repack_dar_cmd(
                     if clean_type == "gtf" {
                         let png_name = format!("{:05}.png", i);
                         let png_path = Path::new(modified_dir).join(png_name);
-                        if png_path.exists() {
+                        let mut use_png = png_path.exists();
+                        if use_hash && use_png {
+                            if let Some(ref saved_hash) = entry.png_hash {
+                                if let Ok(png_bytes) = fs::read(&png_path) {
+                                    if *saved_hash == hash_bytes(&png_bytes) {
+                                        use_png = false;
+                                    }
+                                }
+                            }
+                        }
+
+                        if use_png {
                             let dds_format = entry.dds_format.as_deref().unwrap_or("-rgb32");
                             let orig_hdr = entry.orig_dds_header.as_deref();
                             let _orig_gtf_hdr = entry.orig_gtf_header.as_deref();
