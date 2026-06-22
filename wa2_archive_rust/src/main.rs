@@ -808,6 +808,7 @@ fn extract_dar_cmd(
     output_dir: &str,
     clean: bool,
     only_image: bool,
+    use_hash: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("Extracting DAR: {} -> {}", dar_path, output_dir);
     fs::create_dir_all(output_dir)?;
@@ -909,6 +910,11 @@ fn extract_dar_cmd(
                             if !hdr.is_empty() {
                                 entry_meta.orig_dds_header = Some(hdr);
                             }
+                            if use_hash {
+                                if let Ok(png_bytes) = fs::read(&png_path) {
+                                    entry_meta.png_hash = Some(hash_bytes(&png_bytes));
+                                }
+                            }
                         }
                         Err(e) => {
                             eprintln!("Error converting GTF to PNG at index {}: {}. Saving raw.", i, e);
@@ -925,7 +931,7 @@ fn extract_dar_cmd(
                     fs::create_dir_all(&clean_dir)?;
                     
                     // Extract PKGDDS and convert all GTFs to PNG
-                    match extract_pkgdds_internal(&payload, &clean_dir, true) {
+                    match extract_pkgdds_internal(&payload, &clean_dir, true, use_hash) {
                         Ok(pkg_meta) => {
                             entry_meta.header_extra = Some(pkg_meta.header_extra);
                             entry_meta.pkgdds_entries = Some(pkg_meta.entries);
@@ -941,7 +947,7 @@ fn extract_dar_cmd(
                     let clean_dir = Path::new(output_dir).join(format!("{:05}_clean", i));
                     fs::create_dir_all(&clean_dir)?;
 
-                    match extract_eg_internal(&payload, &clean_dir, true) {
+                    match extract_eg_internal(&payload, &clean_dir, true, use_hash) {
                         Ok(eg_meta) => {
                             entry_meta.eg_meta = Some(eg_meta);
                         }
@@ -1345,6 +1351,7 @@ fn extract_pkgdds_internal(
     pkgdds_bytes: &[u8],
     output_dir: &Path,
     clean: bool,
+    use_hash: bool,
 ) -> Result<PkgddsMeta, Box<dyn std::error::Error>> {
     if pkgdds_bytes.len() < 16 {
         return Err("Invalid PKGDDS data size".into());
@@ -1385,6 +1392,11 @@ fn extract_pkgdds_internal(
             entry_meta.dds_format = Some(fmt);
             if !hdr.is_empty() {
                 entry_meta.orig_dds_header = Some(hdr);
+            }
+            if use_hash {
+                if let Ok(png_bytes) = fs::read(&png_path) {
+                    entry_meta.png_hash = Some(hash_bytes(&png_bytes));
+                }
             }
         } else {
             let out_name = format!("pkg_{:03}.gtf", i);
@@ -1529,6 +1541,7 @@ fn extract_eg_internal(
     eg_bytes: &[u8],
     output_dir: &Path,
     clean: bool,
+    use_hash: bool,
 ) -> Result<EgMeta, Box<dyn std::error::Error>> {
     if eg_bytes.len() < 28 || &eg_bytes[0..4] != b"\x01\x23\x45\x67" {
         return Err("Invalid EG magic".into());
@@ -1569,6 +1582,11 @@ fn extract_eg_internal(
         eg_meta.dds_format = Some(fmt);
         if !hdr.is_empty() {
             eg_meta.orig_dds_header = Some(hdr);
+        }
+        if use_hash {
+            if let Ok(png_bytes) = fs::read(&png_path) {
+                eg_meta.png_hash = Some(hash_bytes(&png_bytes));
+            }
         }
         if payload.len() >= 128 {
             use base64::Engine;
@@ -1707,8 +1725,8 @@ fn repack_eg_internal(
 // Standalone CLI Handlers
 // ==============================================================================
 
-fn handle_extract_dar(dar_file: &str, output_dir: &str, clean: bool, only_image: bool) {
-    if let Err(e) = extract_dar_cmd(dar_file, output_dir, clean, only_image) {
+fn handle_extract_dar(dar_file: &str, output_dir: &str, clean: bool, only_image: bool, use_hash: bool) {
+    if let Err(e) = extract_dar_cmd(dar_file, output_dir, clean, only_image, use_hash) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
@@ -1721,7 +1739,7 @@ fn handle_repack_dar(dar_file: &str, modified_dir: &str, output_dar: &str, clean
     }
 }
 
-fn handle_extract_ddspack(pkgdds_file: &str, output_dir: &str, clean: bool) {
+fn handle_extract_ddspack(pkgdds_file: &str, output_dir: &str, clean: bool, use_hash: bool) {
     println!("Extracting PKGDDS: {} -> {}", pkgdds_file, output_dir);
     if let Err(e) = fs::create_dir_all(output_dir) {
         eprintln!("Error creating output directory: {}", e);
@@ -1736,7 +1754,7 @@ fn handle_extract_ddspack(pkgdds_file: &str, output_dir: &str, clean: bool) {
         }
     };
 
-    match extract_pkgdds_internal(&bytes, Path::new(output_dir), clean) {
+    match extract_pkgdds_internal(&bytes, Path::new(output_dir), clean, use_hash) {
         Ok(meta) => {
             let meta_path = Path::new(output_dir).join("pkgdds_meta.json");
             if let Ok(meta_file) = File::create(meta_path) {
@@ -1901,7 +1919,7 @@ fn handle_repack_ddspack(pkgdds_file: &str, modified_dir: &str, output_pkgdds: &
     println!("PKGDDS Repacking completed successfully.");
 }
 
-fn handle_extract_eg(eg_file: &str, output_dir: &str, clean: bool) {
+fn handle_extract_eg(eg_file: &str, output_dir: &str, clean: bool, use_hash: bool) {
     println!("Extracting EG Container: {} -> {}", eg_file, output_dir);
     if let Err(e) = fs::create_dir_all(output_dir) {
         eprintln!("Error creating output directory: {}", e);
@@ -1916,7 +1934,7 @@ fn handle_extract_eg(eg_file: &str, output_dir: &str, clean: bool) {
         }
     };
 
-    match extract_eg_internal(&bytes, Path::new(output_dir), clean) {
+    match extract_eg_internal(&bytes, Path::new(output_dir), clean, use_hash) {
         Ok(meta) => {
             let meta_path = Path::new(output_dir).join("eg_meta.json");
             if let Ok(meta_file) = File::create(meta_path) {
@@ -2002,19 +2020,19 @@ fn main() {
 
     match cli.command {
         Commands::ExtractDar { dar_file, output_dir, clean, only_image } => {
-            handle_extract_dar(&dar_file, &output_dir, clean, only_image);
+            handle_extract_dar(&dar_file, &output_dir, clean, only_image, cli.use_hash);
         }
         Commands::RepackDar { dar_file, modified_dir, output_dar, clean, .. } => {
             handle_repack_dar(&dar_file, &modified_dir, &output_dar, clean, cli.use_hash);
         }
         Commands::ExtractDdspack { pkgdds_file, output_dir, clean } => {
-            handle_extract_ddspack(&pkgdds_file, &output_dir, clean);
+            handle_extract_ddspack(&pkgdds_file, &output_dir, clean, cli.use_hash);
         }
         Commands::RepackDdspack { pkgdds_file, modified_dir, output_pkgdds, clean, .. } => {
             handle_repack_ddspack(&pkgdds_file, &modified_dir, &output_pkgdds, clean, cli.use_hash);
         }
         Commands::ExtractEg { eg_file, output_dir, clean } => {
-            handle_extract_eg(&eg_file, &output_dir, clean);
+            handle_extract_eg(&eg_file, &output_dir, clean, cli.use_hash);
         }
         Commands::RepackEg { eg_file, modified_dir, output_eg, clean, .. } => {
             handle_repack_eg(&eg_file, &modified_dir, &output_eg, clean, cli.use_hash);

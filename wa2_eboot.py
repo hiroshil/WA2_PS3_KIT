@@ -255,9 +255,9 @@ def patch_eboot(eboot_path: str, charset_num: int, font2_bin_path: str, font2_nu
         buf2 = f.read()
         
     # Patch Font 1 Size & Address
-    FONT1_POS = 0xfedf0
+    FONT1_POS = 0xfe3f0
     FONT1_SIZE = 0x1524
-    PATCH_FONT_POS = 0x120d00
+    PATCH_FONT_POS = 0x120e00
     
     # Copy original font 1 to patch location
     buf[PATCH_FONT_POS:PATCH_FONT_POS+FONT1_SIZE] = buf[FONT1_POS:FONT1_POS+FONT1_SIZE]
@@ -278,7 +278,7 @@ def patch_eboot(eboot_path: str, charset_num: int, font2_bin_path: str, font2_nu
     print(f"Total charset {charset_num}, end {hex(font_code)}")
     
     # Patch Font Size 1
-    PATCH_FONT_SIZE_POS = 0xca2a
+    PATCH_FONT_SIZE_POS = 0xc98a
     opcode = struct.unpack(">H", buf[PATCH_FONT_SIZE_POS:PATCH_FONT_SIZE_POS+2])[0]
     if opcode != 0xa92:
         print("Error: Bad ELF magic for Font 1 size patch.", file=sys.stderr)
@@ -287,15 +287,15 @@ def patch_eboot(eboot_path: str, charset_num: int, font2_bin_path: str, font2_nu
     print(f"Patched Font 1 size to {charset_num}")
     
     # Patch Font Address 1
-    PATCH_FONT_ADDRESS = 0xcaa4
-    if buf[PATCH_FONT_ADDRESS:PATCH_FONT_ADDRESS+8] != b"\x3C\x60\x00\x11\x30\x63\xED\xF0":
+    PATCH_FONT_ADDRESS = 0xca04
+    if buf[PATCH_FONT_ADDRESS:PATCH_FONT_ADDRESS+8] != b"\x3C\x60\x00\x11\x30\x63\xE3\xF0":
         print("Error: Bad ELF magic for Font 1 address patch.", file=sys.stderr)
         sys.exit(1)
-    buf[PATCH_FONT_ADDRESS:PATCH_FONT_ADDRESS+8] = b"\x3C\x60\x00\x13\x30\x63\x0D\x00"
+    buf[PATCH_FONT_ADDRESS:PATCH_FONT_ADDRESS+8] = b"\x3C\x60\x00\x13\x30\x63\x0E\x00"
     print(f"Patched Font 1 address to {hex(PATCH_FONT_POS)}")
     
     # Patch Font 2 Size
-    PATCH_FONT_SIZE_POS2 = 0xca12
+    PATCH_FONT_SIZE_POS2 = 0xc972
     opcode = struct.unpack(">H", buf[PATCH_FONT_SIZE_POS2:PATCH_FONT_SIZE_POS2+2])[0]
     if opcode != 0x70:
         print("Error: Bad ELF magic for Font 2 size patch.", file=sys.stderr)
@@ -304,9 +304,9 @@ def patch_eboot(eboot_path: str, charset_num: int, font2_bin_path: str, font2_nu
     print(f"Patched Font 2 size to {font2_num}")
     
     # Patch Font 2 Address
-    PATCH_FONT_ADDRESS2 = 0xcba0
+    PATCH_FONT_ADDRESS2 = 0xcb00
     PATCH_FONT_POS2 = 0x122c00
-    if buf[PATCH_FONT_ADDRESS2:PATCH_FONT_ADDRESS2+8] != b"\x3C\x60\x00\x11\x30\x63\x03\x15":
+    if buf[PATCH_FONT_ADDRESS2:PATCH_FONT_ADDRESS2+8] != b"\x3C\x60\x00\x11\x30\x63\xF9\x15":
         print("Error: Bad ELF magic for Font 2 address patch.", file=sys.stderr)
         sys.exit(1)
     buf[PATCH_FONT_ADDRESS2:PATCH_FONT_ADDRESS2+8] = b"\x3C\x60\x00\x13\x30\x63\x2c\x00"
@@ -317,35 +317,26 @@ def patch_eboot(eboot_path: str, charset_num: int, font2_bin_path: str, font2_nu
     LOAD_POS = 0x64
     LOAD_NEW_SIZE = 0x12B000
     opcode = struct.unpack(">I", buf[LOAD_POS:LOAD_POS+4])[0]
-    if opcode != 0x120CE8:
+    if opcode != 0x120DE8:
         print("Error: Wrong ELF load size.", file=sys.stderr)
         sys.exit(1)
     buf[LOAD_POS:LOAD_POS+4] = struct.pack(">I", LOAD_NEW_SIZE)
     buf[LOAD_POS+8:LOAD_POS+12] = struct.pack(">I", LOAD_NEW_SIZE)
     print(f"Patched ELF load size to {hex(LOAD_NEW_SIZE)}")
     
-    # Patch Section Size
-    SECTION_POS = 0x6ccc2c
-    SECTION_NEW_SIZE = 0xA358
-    opcode = struct.unpack(">I", buf[SECTION_POS:SECTION_POS+4])[0]
-    if opcode != 0x40:
-        print("Error: Wrong ELF section size.", file=sys.stderr)
-        sys.exit(1)
-    buf[SECTION_POS:SECTION_POS+4] = struct.pack(">I", SECTION_NEW_SIZE)
-    print(f"Patched ELF section size to {hex(SECTION_NEW_SIZE)}")
+    # (Removed) Patch Section Size - Out of bounds for this EBOOT version
     
-    # Patch Warning PNG
-    with open(warning_png_path, "rb") as f:
-        png_data = f.read()
-    png_size = len(png_data) - 4
-    PNG_WARNING_POS = 0x660040
-    PNG_WARNING_SIZE = 0x2BA00
-    if png_size > PNG_WARNING_SIZE:
-        print(f"Error: Warning PNG size too large ({png_size} > {PNG_WARNING_SIZE})", file=sys.stderr)
-        sys.exit(1)
-    buf[PNG_WARNING_POS:PNG_WARNING_POS+png_size] = png_data[4:]
-    print("Patched warning.png")
+    # (Removed) Patch Warning PNG - Out of bounds for this EBOOT version
     
+    # Extra patch for comma delimiter
+    try:
+        buf[0x101b44] = 0x24
+        buf[0x4aec7] = 0x24
+        buf[0x4af23] = 0x24
+        print("Patched EBOOT delimiter ',' to '$'.")
+    except Exception as e:
+        print(f"Warning: Could not patch delimiter: {e}", file=sys.stderr)
+        
     # Save back to file
     with open(eboot_path, "wb") as f:
         f.write(buf)
