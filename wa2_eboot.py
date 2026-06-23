@@ -15,9 +15,11 @@ YINFU_UNICODE = '\u266a' # Music char
 # Extract EBOOT Command
 # ==============================================================================
 
-def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
-    print(f"Extracting EBOOT: {eboot_path} -> {output_dir} (Clean Mode: {clean_mode})")
-    
+def extract_eboot(eboot_path: str, output_dir: str, clean_only: bool = False):
+    print(f"Extracting EBOOT: {eboot_path} to {output_dir}")
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        
     eboot_dir = os.path.join(output_dir, "eboot")
     os.makedirs(eboot_dir, exist_ok=True)
     
@@ -28,7 +30,16 @@ def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
         print("Error: Invalid EBOOT.ELF file.", file=sys.stderr)
         sys.exit(1)
         
+    # Nhận diện Delimiter từ EBOOT
+    eboot_delimiter = eboot_data[0x101b44]
+    delimiter_patched = (eboot_delimiter != 0x2C)
+    
+    if delimiter_patched:
+        print(f"[*] Auto-Delimiter Detected: EBOOT uses '{chr(eboot_delimiter)}' (0x{eboot_delimiter:02X}).")
+        
     pos = WA2_EBOOT101_INDEX
+    first_txt_checked = False
+    need_delimiter_upgrade = False
     meta_entries = []
     
     while True:
@@ -60,24 +71,34 @@ def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
         comp_payload = eboot_data[cpos:cpos+block_size]
         
         # Decompress
-        decomp_payload = wa2_elzma.decompress_data(comp_payload)
+        uncomp_data = wa2_elzma.decompress_data(comp_payload)
         
         # Decide if we write this file
         is_txt = norm_name.endswith(".txt")
         
-        if not clean_mode or is_txt:
-            # Write decompressed file
-            if clean_mode and is_txt:
-                # Convert to UTF-16
-                text = decomp_payload.decode('cp932', errors='replace')
-                out_path = os.path.join(eboot_dir, norm_name)
-                with codecs.open(out_path, "w", encoding="utf-16") as out_f:
-                    out_f.write(text)
-            else:
-                # Write raw binary file
-                out_path = os.path.join(eboot_dir, norm_name)
-                with open(out_path, "wb") as out_f:
-                    out_f.write(decomp_payload)
+        # Kiểm tra logic Delimiter cho file TXT
+        if is_txt and delimiter_patched:
+            if not first_txt_checked and len(uncomp_data) > 0:
+                first_txt_checked = True
+                if uncomp_data[0] != eboot_delimiter:
+                    need_delimiter_upgrade = True
+                    print(f"[*] Kịch bản TXT đang dùng dấu ngắt cũ. Sẽ tự động nâng cấp sang '{chr(eboot_delimiter)}'.")
+            
+            if need_delimiter_upgrade:
+                uncomp_data = uncomp_data.replace(b',', bytes([eboot_delimiter]))
+        
+        # Save raw binary/uncompressed file
+        raw_path = os.path.join(output_dir, norm_name)
+        with open(raw_path, "wb") as f:
+            f.write(uncomp_data)
+        
+        # Clean mode for TXT files
+        if clean_only and is_txt:
+            # Convert to UTF-16
+            text = map_sjis_to_vietnamese(uncomp_data)
+            out_path = os.path.join(eboot_dir, norm_name)
+            with codecs.open(out_path, "w", encoding="utf-16") as out_f:
+                out_f.write(text)
                     
         meta_entries.append({
             "name": name,
@@ -94,7 +115,7 @@ def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
     meta_path = os.path.join(output_dir, "eboot_meta.json")
     with open(meta_path, "w", encoding="utf-8") as meta_f:
         json.dump({
-            "mode": "clean" if clean_mode else "raw",
+            "mode": "clean" if clean_only else "raw",
             "files": meta_entries
         }, meta_f, indent=2)
         
@@ -103,6 +124,95 @@ def extract_eboot(eboot_path: str, output_dir: str, clean_mode: bool):
 # ==============================================================================
 # Inject EBOOT Command
 # ==============================================================================
+
+def map_vietnamese_to_sjis(text_content: str) -> bytes:
+    VIETNAMESE_CHARS = [
+        None, 'Á', 'À', 'Ả', 'Ã', 'Ạ', 'Ă', 'Ắ', 'Ằ', 'Ẳ', 'Ẵ', 'Ặ', 'Â', 'Ấ', 'Ầ', 'Ẩ', 'Ẫ', 'Ậ',
+        None, 'É', 'È', 'Ẻ', 'Ẽ', 'Ẹ', 'Ê', 'Ế', 'Ề', 'Ể', 'Ễ', 'Ệ',
+        None, 'Í', 'Ì', 'Ỉ', 'Ĩ', 'Ị',
+        None, 'Ó', 'Ò', 'Ỏ', 'Õ', 'Ọ', 'Ô', 'Ố', 'Ồ', 'Ổ', 'Ỗ', 'Ộ', 'Ơ', 'Ớ', 'Ờ', 'Ở', 'Ỡ', 'Ợ',
+        None, 'Ú', 'Ù', 'Ủ', 'Ũ', 'Ụ', 'Ư', 'Ứ', 'Ừ', 'Ử', 'Ữ', 'Ự',
+        None, 'Ý', 'Ỳ', 'Ỷ', 'Ỹ', 'Ỵ',
+        None, 'Đ',
+        None, 'á', 'à', 'ả', 'ã', 'ạ', 'ă', 'ắ', 'ằ', 'ẳ', 'ẵ', 'ặ', 'â', 'ấ', 'ầ', 'ẩ', 'ẫ', 'ậ',
+        None, 'é', 'è', 'ẻ', 'ẽ', 'ẹ', 'ê', 'ế', 'ề', 'ể', 'ễ', 'ệ',
+        None, 'í', 'ì', 'ỉ', 'ĩ', 'ị',
+        None, 'ó', 'ò', 'ỏ', 'õ', 'ọ', 'ô', 'ố', 'ồ', 'ổ', 'ỗ', 'ộ', 'ơ', 'ớ', 'ờ', 'ở', 'ỡ', 'ợ',
+        None, 'ú', 'ù', 'ủ', 'ũ', 'ụ', 'ư', 'ứ', 'ừ', 'ử', 'ữ', 'ự',
+        None, 'ý', 'ỳ', 'ỷ', 'ỹ', 'ỵ',
+        None, 'đ'
+    ]
+    out = bytearray()
+    for char in text_content:
+        if char in VIETNAMESE_CHARS:
+            # Map Vietnamese to 0xF073 onwards, nhảy cóc 0x7F (Delete)
+            idx = VIETNAMESE_CHARS.index(char)
+            code = 0xF073 + idx
+            if (code & 0xff) >= 0x7F:
+                code += 1
+            out.extend(struct.pack(">H", code))
+        else:
+            # Giữ nguyên toàn bộ ký tự gốc (kể cả tag/control codes), chỉ encode sang cp932 bình thường
+            out.extend(char.encode('cp932', errors='replace'))
+    return bytes(out)
+
+def map_sjis_to_vietnamese(sjis_bytes: bytes) -> str:
+    VIETNAMESE_CHARS = [
+        None, 'Á', 'À', 'Ả', 'Ã', 'Ạ', 'Ă', 'Ắ', 'Ằ', 'Ẳ', 'Ẵ', 'Ặ', 'Â', 'Ấ', 'Ầ', 'Ẩ', 'Ẫ', 'Ậ',
+        None, 'É', 'È', 'Ẻ', 'Ẽ', 'Ẹ', 'Ê', 'Ế', 'Ề', 'Ể', 'Ễ', 'Ệ',
+        None, 'Í', 'Ì', 'Ỉ', 'Ĩ', 'Ị',
+        None, 'Ó', 'Ò', 'Ỏ', 'Õ', 'Ọ', 'Ô', 'Ố', 'Ồ', 'Ổ', 'Ỗ', 'Ộ', 'Ơ', 'Ớ', 'Ờ', 'Ở', 'Ỡ', 'Ợ',
+        None, 'Ú', 'Ù', 'Ủ', 'Ũ', 'Ụ', 'Ư', 'Ứ', 'Ừ', 'Ử', 'Ữ', 'Ự',
+        None, 'Ý', 'Ỳ', 'Ỷ', 'Ỹ', 'Ỵ',
+        None, 'Đ',
+        None, 'á', 'à', 'ả', 'ã', 'ạ', 'ă', 'ắ', 'ằ', 'ẳ', 'ẵ', 'ặ', 'â', 'ấ', 'ầ', 'ẩ', 'ẫ', 'ậ',
+        None, 'é', 'è', 'ẻ', 'ẽ', 'ẹ', 'ê', 'ế', 'ề', 'ể', 'ễ', 'ệ',
+        None, 'í', 'ì', 'ỉ', 'ĩ', 'ị',
+        None, 'ó', 'ò', 'ỏ', 'õ', 'ọ', 'ô', 'ố', 'ồ', 'ổ', 'ỗ', 'ộ', 'ơ', 'ớ', 'ờ', 'ở', 'ỡ', 'ợ',
+        None, 'ú', 'ù', 'ủ', 'ũ', 'ụ', 'ư', 'ứ', 'ừ', 'ử', 'ữ', 'ự',
+        None, 'ý', 'ỳ', 'ỷ', 'ỹ', 'ỵ',
+        None, 'đ'
+    ]
+    out = []
+    i = 0
+    length = len(sjis_bytes)
+    while i < length:
+        b1 = sjis_bytes[i]
+        # Phát hiện ký tự 2-byte (Shift-JIS hoặc Tiếng Việt)
+        if (0x81 <= b1 <= 0x9F) or (0xE0 <= b1 <= 0xFC):
+            if i + 1 < length:
+                b2 = sjis_bytes[i+1]
+                # Kiểm tra dải ký tự Tiếng Việt (Bắt đầu bằng 0xF0)
+                if b1 == 0xF0:
+                    code = (b1 << 8) | b2
+                    idx = code - 0xF073
+                    if b2 > 0x7F:
+                        idx -= 1
+                    if 0 <= idx < len(VIETNAMESE_CHARS):
+                        char = VIETNAMESE_CHARS[idx]
+                        if char is not None:
+                            out.append(char)
+                            i += 2
+                            continue
+                # Giải mã CP932 thông thường nếu không phải tiếng Việt
+                try:
+                    char = sjis_bytes[i:i+2].decode('cp932')
+                    out.append(char)
+                except UnicodeDecodeError:
+                    out.append('?')
+                i += 2
+            else:
+                out.append('?')
+                i += 1
+        else:
+            # Giải mã ký tự ASCII 1-byte (Bao gồm Tag/Control Codes)
+            try:
+                char = bytes([b1]).decode('cp932')
+                out.append(char)
+            except UnicodeDecodeError:
+                out.append('?')
+            i += 1
+    return "".join(out)
 
 def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
     print(f"Injecting into EBOOT: {out_eboot} from template {in_eboot} with files from {input_dir}")
@@ -123,6 +233,12 @@ def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
     with open(in_eboot, "rb") as f:
         eboot_data = f.read()
         eboot_buf = bytearray(eboot_data)
+        
+    # Nhận diện Delimiter từ EBOOT mẫu
+    eboot_delimiter = eboot_data[0x101b44]
+    delimiter_patched = (eboot_delimiter != 0x2C)
+    if delimiter_patched:
+        print(f"[*] Auto-Delimiter Detected: EBOOT expects '{chr(eboot_delimiter)}' (0x{eboot_delimiter:02X}) for TXT scripts.")
         
     pos = WA2_EBOOT101_INDEX
     cur_pos = 0
@@ -161,14 +277,14 @@ def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
         new_comp = orig_block
         
         mod_txt_path = os.path.join(input_dir, "eboot", norm_name)
-        mod_elzma_path = os.path.join(input_dir, "eboot", norm_name + ".elzma")
+        mod_raw_path = os.path.join(input_dir, norm_name)
 
         # 1. Try clean mode translated .txt
         if clean_mode and norm_name.endswith(".txt") and os.path.exists(mod_txt_path):
             with open(mod_txt_path, "rb") as f:
                 mod_data = f.read()
             if mod_data.startswith(b'\xff\xfe'):
-                text_content = mod_data.decode("utf-16")
+                text_content = mod_data.decode("utf-16-le")
             elif mod_data.startswith(b'\xfe\xff'):
                 text_content = mod_data.decode("utf-16-be")
             elif mod_data.startswith(b'\xef\xbb\xbf'):
@@ -178,9 +294,19 @@ def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
                     text_content = mod_data.decode("utf-8")
                 except UnicodeDecodeError:
                     text_content = mod_data.decode("cp932", errors="replace")
-            # Replace custom music note unicode and encode to CP932
+            # Replace custom music note unicode
             text_content = text_content.replace('\u4f93', '♪')
-            mapped_bytes = text_content.encode('cp932', errors='replace')
+            
+            # KIỂM TRA TÍNH TƯƠNG THÍCH DELIMITER
+            if text_content and delimiter_patched:
+                if text_content[0] == ',':
+                    print(f"\n[LỖI NGHIÊM TRỌNG] Kịch bản '{norm_name}' dùng dấu ',' làm ngắt dòng, nhưng EBOOT yêu cầu '{chr(eboot_delimiter)}'. Kịch bản không tương thích!")
+                    sys.exit(1)
+                # Thay '\,' bằng ','
+                text_content = text_content.replace(r'\,', ',')
+            
+            mapped_bytes = map_vietnamese_to_sjis(text_content)
+            
             new_uncomp = len(mapped_bytes)
             # Compress
             comp_data = wa2_elzma.compress_data(mapped_bytes)
@@ -192,10 +318,17 @@ def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
             print(f"Injecting modified text: {norm_name} ({orig_uncomp}->{new_uncomp} bytes)")
             
         # 2. Try raw mode modified decompressed file
-        elif not clean_mode and os.path.exists(os.path.join(input_dir, "eboot", norm_name)):
-            mod_raw_path = os.path.join(input_dir, "eboot", norm_name)
+        elif not clean_mode and os.path.exists(mod_raw_path):
             with open(mod_raw_path, "rb") as f:
                 raw_data = f.read()
+                
+            if norm_name.endswith(".txt") and delimiter_patched and len(raw_data) > 0:
+                if raw_data[0] == 0x2C: # Dấu ','
+                    print(f"\n[LỖI NGHIÊM TRỌNG] Kịch bản thô '{norm_name}' dùng dấu ',' làm ngắt dòng, nhưng EBOOT yêu cầu '{chr(eboot_delimiter)}'. Kịch bản không tương thích!")
+                    sys.exit(1)
+                # Thay b'\,' bằng b','
+                raw_data = raw_data.replace(b'\\,', b',')
+                
             new_uncomp = len(raw_data)
             comp_data = wa2_elzma.compress_data(raw_data)
             payload = comp_data[4:] # Strip 4-byte prefix
@@ -209,6 +342,15 @@ def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
         if not payload_written:
             orig_payload_off = orig_offset - EBOOT_OFFSET
             payload = eboot_data[orig_payload_off:orig_payload_off+orig_block]
+            
+            # Nâng cấp các file TXT cũ ở Fallback để tránh Crash nếu EBOOT đã đổi Delimiter
+            if norm_name.endswith(".txt") and delimiter_patched:
+                uncomp_data = wa2_elzma.decompress_data(payload, orig_uncomp)
+                if len(uncomp_data) > 0 and uncomp_data[0] == 0x2C:
+                    uncomp_data = uncomp_data.replace(b',', bytes([eboot_delimiter]))
+                    comp_data = wa2_elzma.compress_data(uncomp_data)
+                    payload = comp_data[4:]
+                    orig_block = len(payload)
             
             eboot_buf[cur_pos:cur_pos+orig_block] = payload
             new_uncomp = orig_uncomp
@@ -247,12 +389,89 @@ def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
 # Patch EBOOT Command
 # ==============================================================================
 
-def patch_eboot(eboot_path: str, charset_num: int, font2_bin_path: str, font2_num: int, warning_png_path: str):
+def patch_eboot(eboot_path: str, charset_num: int, kerning_action: str, font2_bin_path: str = None, font2_num: int = 0, warning_png_path: str = None):
     with open(eboot_path, "rb") as f:
         buf = bytearray(f.read())
         
-    with open(font2_bin_path, "rb") as f:
-        buf2 = f.read()
+    # ==========================================
+    # KERNING PATCH LOGIC
+    # ==========================================
+    HOOK_ADDR_FILE  = 0x50e3c - 0x10000
+    ORIGINAL_INSTRUCTION = b"\x80\x63\x00\x00"
+    HOOK_INSTRUCTION = b"\x4B\xF2\xF6\x4C"
+    CAVE_ADDR_FILE  = 0x130488 - 0x10000
+    
+    ROUTINE = [
+        0x2C042A48,
+        0x4180000C,
+        0x38600014,
+        0x4BF209AC,
+        0x80630000,
+        0x4BF209A4
+    ]
+    
+    OLD_HOOK_ADDR_FILE = 0x51480 - 0x10000
+    OLD_ORIGINAL_INSTRUCTION = b"\x80\x61\x01\xA0"
+
+    print(f"\n--- KERNING PATCH ({kerning_action.upper()}) ---")
+    if kerning_action == "check":
+        current = bytes(buf[HOOK_ADDR_FILE:HOOK_ADDR_FILE+4])
+        old_current = bytes(buf[OLD_HOOK_ADDR_FILE:OLD_HOOK_ADDR_FILE+4])
+        if current == HOOK_INSTRUCTION:
+            print("[+] Patch Kerning V2 (0x50e3c): ĐANG HOẠT ĐỘNG (An toàn)")
+        elif current == ORIGINAL_INSTRUCTION:
+            print("[-] Patch Kerning V2 (0x50e3c): CHƯA PATCH")
+        else:
+            print(f"[!] Patch Kerning V2 (0x50e3c): KHÔNG XÁC ĐỊNH ({current.hex()})")
+            
+        if old_current != OLD_ORIGINAL_INSTRUCTION:
+            print("[!] Phát hiện Patch V1 cũ (0x51480) vẫn còn sót lại! Hãy chạy với cờ --kerning apply để dọn dẹp.")
+        return # Nếu chỉ check thì dừng tại đây, không lưu đè EBOOT
+
+    elif kerning_action == "remove":
+        current = bytes(buf[HOOK_ADDR_FILE:HOOK_ADDR_FILE+4])
+        old_current = bytes(buf[OLD_HOOK_ADDR_FILE:OLD_HOOK_ADDR_FILE+4])
+        if old_current != OLD_ORIGINAL_INSTRUCTION:
+            buf[OLD_HOOK_ADDR_FILE:OLD_HOOK_ADDR_FILE+4] = OLD_ORIGINAL_INSTRUCTION
+            print("Đã gỡ bỏ Hook V1 cũ.")
+        
+        if current == ORIGINAL_INSTRUCTION:
+            print("EBOOT hiện tại là nguyên bản tại 0x50e3c. Không có Patch V2 nào để gỡ.")
+        elif current == HOOK_INSTRUCTION:
+            buf[HOOK_ADDR_FILE:HOOK_ADDR_FILE+4] = ORIGINAL_INSTRUCTION
+            for i in range(len(ROUTINE)):
+                buf[CAVE_ADDR_FILE + i*4 : CAVE_ADDR_FILE + i*4 + 4] = b"\x60\x00\x00\x00"
+            print("=> GỠ PATCH KERNING THÀNH CÔNG! EBOOT đã trở về nguyên bản gốc.")
+        else:
+            print("Không nhận diện được Patch tại địa chỉ Hook. Bỏ qua.")
+
+    elif kerning_action == "apply":
+        current = bytes(buf[HOOK_ADDR_FILE:HOOK_ADDR_FILE+4])
+        old_current = bytes(buf[OLD_HOOK_ADDR_FILE:OLD_HOOK_ADDR_FILE+4])
+        
+        if current == HOOK_INSTRUCTION:
+            print("EBOOT đã được Patch V2 từ trước. Không cần làm gì thêm!")
+        elif current != ORIGINAL_INSTRUCTION:
+            print("Cảnh báo: Lệnh tại địa chỉ Hook không phải là lệnh gốc! EBOOT có thể đã bị sửa đổi bởi một Patch khác.")
+        else:
+            if old_current != OLD_ORIGINAL_INSTRUCTION:
+                print("Đang gỡ bỏ Hook V1 cũ tại 0x51480...")
+                buf[OLD_HOOK_ADDR_FILE:OLD_HOOK_ADDR_FILE+4] = OLD_ORIGINAL_INSTRUCTION
+
+            buf[HOOK_ADDR_FILE:HOOK_ADDR_FILE+4] = HOOK_INSTRUCTION
+            for i, inst in enumerate(ROUTINE):
+                buf[CAVE_ADDR_FILE + i*4 : CAVE_ADDR_FILE + i*4 + 4] = inst.to_bytes(4, byteorder='big')
+            print("=> PATCH KERNING THÀNH CÔNG! Đã kích hoạt Kerning tiếng Việt (V2).")
+            
+    print("\n--- GENERAL EBOOT PATCH ---")
+        
+    # Xử lý Font 2 (Nếu người dùng cung cấp)
+    if font2_bin_path and os.path.exists(font2_bin_path) and font2_bin_path.lower() != "none":
+        with open(font2_bin_path, "rb") as f:
+            buf2 = f.read()
+    else:
+        buf2 = None
+        print("[*] Skipping Font 2 patch (No valid font2_bin provided)")
         
     # Patch Font 1 Size & Address
     FONT1_POS = 0xfe3f0
@@ -263,13 +482,20 @@ def patch_eboot(eboot_path: str, charset_num: int, font2_bin_path: str, font2_nu
     buf[PATCH_FONT_POS:PATCH_FONT_POS+FONT1_SIZE] = buf[FONT1_POS:FONT1_POS+FONT1_SIZE]
     
     pos = PATCH_FONT_POS + FONT1_SIZE
-    font_num = charset_num - FONT1_SIZE // 2
+    
+    # Cho phép điền tịnh tiến trực tiếp từ 0xF043 để duy trì mảng Sorted. 
+    # 48 mã đầu tiên (0xF043-0xF072) sẽ chiếu tự động vào 48 ô trắng cuối hàng 54.
+    font_num = charset_num - (FONT1_SIZE // 2)
     font_code = 0xf043
     
     while font_num > 0:
         if (font_code & 0xff) < 0x40:
             font_code += 1
             continue
+        if (font_code & 0xff) == 0x7F:
+            font_code += 1
+            continue
+            
         buf[pos:pos+2] = struct.pack(">H", font_code)
         font_code += 1
         font_num -= 1
@@ -294,24 +520,24 @@ def patch_eboot(eboot_path: str, charset_num: int, font2_bin_path: str, font2_nu
     buf[PATCH_FONT_ADDRESS:PATCH_FONT_ADDRESS+8] = b"\x3C\x60\x00\x13\x30\x63\x0E\x00"
     print(f"Patched Font 1 address to {hex(PATCH_FONT_POS)}")
     
-    # Patch Font 2 Size
-    PATCH_FONT_SIZE_POS2 = 0xc972
-    opcode = struct.unpack(">H", buf[PATCH_FONT_SIZE_POS2:PATCH_FONT_SIZE_POS2+2])[0]
-    if opcode != 0x70:
-        print("Error: Bad ELF magic for Font 2 size patch.", file=sys.stderr)
-        sys.exit(1)
-    buf[PATCH_FONT_SIZE_POS2:PATCH_FONT_SIZE_POS2+2] = struct.pack(">H", font2_num)
-    print(f"Patched Font 2 size to {font2_num}")
-    
-    # Patch Font 2 Address
-    PATCH_FONT_ADDRESS2 = 0xcb00
-    PATCH_FONT_POS2 = 0x122c00
-    if buf[PATCH_FONT_ADDRESS2:PATCH_FONT_ADDRESS2+8] != b"\x3C\x60\x00\x11\x30\x63\xF9\x15":
-        print("Error: Bad ELF magic for Font 2 address patch.", file=sys.stderr)
-        sys.exit(1)
-    buf[PATCH_FONT_ADDRESS2:PATCH_FONT_ADDRESS2+8] = b"\x3C\x60\x00\x13\x30\x63\x2c\x00"
-    print(f"Patched Font 2 address to {hex(PATCH_FONT_POS2)}")
-    buf[PATCH_FONT_POS2:PATCH_FONT_POS2+len(buf2)] = buf2
+    # Patch Font 2 Size & Address (Nếu có)
+    if buf2 and font2_num > 0:
+        PATCH_FONT_SIZE_POS2 = 0xc972
+        opcode = struct.unpack(">H", buf[PATCH_FONT_SIZE_POS2:PATCH_FONT_SIZE_POS2+2])[0]
+        if opcode != 0x70:
+            print("Error: Bad ELF magic for Font 2 size patch.", file=sys.stderr)
+            sys.exit(1)
+        buf[PATCH_FONT_SIZE_POS2:PATCH_FONT_SIZE_POS2+2] = struct.pack(">H", font2_num)
+        print(f"Patched Font 2 size to {font2_num}")
+        
+        PATCH_FONT_ADDRESS2 = 0xcb00
+        PATCH_FONT_POS2 = 0x122c00
+        if buf[PATCH_FONT_ADDRESS2:PATCH_FONT_ADDRESS2+8] != b"\x3C\x60\x00\x11\x30\x63\xF9\x15":
+            print("Error: Bad ELF magic for Font 2 address patch.", file=sys.stderr)
+            sys.exit(1)
+        buf[PATCH_FONT_ADDRESS2:PATCH_FONT_ADDRESS2+8] = b"\x3C\x60\x00\x13\x30\x63\x2c\x00"
+        print(f"Patched Font 2 address to {hex(PATCH_FONT_POS2)}")
+        buf[PATCH_FONT_POS2:PATCH_FONT_POS2+len(buf2)] = buf2
     
     # Patch Load Size
     LOAD_POS = 0x64
@@ -364,12 +590,13 @@ def main():
     inj_parser.add_argument("input_dir", help="Directory containing modified files")
     
     # patch
-    pat_parser = subparsers.add_parser("patch", help="Patch EBOOT.ELF font and warning data")
+    pat_parser = subparsers.add_parser("patch", help="Patch EBOOT.ELF font, warning data, and kerning")
     pat_parser.add_argument("eboot_file", help="Path to EBOOT.ELF")
-    pat_parser.add_argument("charset_num", type=int, help="Charset count")
-    pat_parser.add_argument("font2_bin", help="Path to font2.bin")
-    pat_parser.add_argument("font2_num", type=int, help="Font2 size")
-    pat_parser.add_argument("warning_png", help="Path to warning.png")
+    pat_parser.add_argument("--charset", type=int, default=2907, help="Charset count (Mặc định: 2907)")
+    pat_parser.add_argument("--kerning", choices=["apply", "remove", "check"], required=True, help="Hành động cho Kerning Patch (bắt buộc)")
+    pat_parser.add_argument("font2_bin", nargs="?", default="none", help="Path to font2.bin (Optional)")
+    pat_parser.add_argument("font2_num", nargs="?", type=int, default=0, help="Font2 size (Optional)")
+    pat_parser.add_argument("warning_png", nargs="?", default="none", help="Path to warning.png (Optional)")
     
     args = parser.parse_args()
     
@@ -378,7 +605,7 @@ def main():
     elif args.command == "inject":
         inject_eboot(args.in_eboot, args.out_eboot, args.input_dir)
     elif args.command == "patch":
-        patch_eboot(args.eboot_file, args.charset_num, args.font2_bin, args.font2_num, args.warning_png)
+        patch_eboot(args.eboot_file, args.charset, args.kerning, args.font2_bin, args.font2_num, args.warning_png)
 
 if __name__ == "__main__":
     main()

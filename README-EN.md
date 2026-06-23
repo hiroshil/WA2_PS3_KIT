@@ -97,12 +97,22 @@ python wa2_eboot.py inject "EBOOT.ELF.org" "EBOOT.ELF" "input_dir"
 ```
 The automated Inject mechanism operates based on `eboot_meta.json`. If it detects `clean` mode, it automatically processes your modified `.txt` scripts and injects them into the EBOOT. Crucially, for any files missing from the disk (skipped during `--clean` extraction), the tool automatically triggers the **Fallback** feature (safely copying the original binary payload from the source EBOOT to shift the data blocks), completely eliminating the "Rebuild failed" crashes of previous versions.
 
-**Font / Warning Patching:**
+**Font / Warning / Kerning / Delimiter Patching (All-in-one Patch):**
 ```bash
-python wa2_eboot.py patch EBOOT.ELF <charset_num> <font2_bin> <font2_num> <warning_png>
+python wa2_eboot.py patch EBOOT.ELF --charset <num> --kerning {apply|remove|check} <font2_bin> <font2_num> <warning_png>
 ```
+This command now acts as an all-in-one patcher:
+- Patches the size and address of the new Font set via the `--charset` flag (Defaults to `2907` if omitted).
+- **Integrated Kerning Patch:** Automatically manages Vietnamese character spacing via the `--kerning` flag.
+    - `--kerning apply`: Finds a safe Code Cave (0x130488), removes original Width Array limits, and enforces a fixed 20px width for Vietnamese text (Fixes the white box error).
+    - `--kerning remove`: Cleans up machine code, restoring EBOOT to factory original.
+    - `--kerning check`: Quickly checks if the EBOOT has been patched.
+- **Script Delimiter Replacement:** Changes from `,` (0x2C) to `$` (0x24) for Vietnamese/English compatibility.
+    - During `extract`: The tool detects if EBOOT uses `$`, then safely clears out old `,` signs in `.txt` files to `$`.
+    - During `inject`: The tool runs security checks. If an incorrect script containing `,` is used, it throws a fatal error preventing a crash. If the script is valid, it converts `\,` characters (typed by the user) into true commas `,` for in-game display.
+- (Temporarily disabled) Patches the Section size and Warning PNG to maintain compatibility with the current ELF file.
 
-### 4. `wa2_font.py` (Font Graphics Processor)
+### 4. `wa2_font.py` (Font Graphics Processor - deprecated)
 This tool is exclusively dedicated to processing the game's font graphics files:
 - **Build mini font patch table:** `python wa2_font.py build-mini input.txt input.tbl output_name` (Generates `mini_up.bin`).
 - **Process dds3 images:** Use the `extract-dds` and `make-dds` commands.

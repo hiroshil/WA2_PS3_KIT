@@ -1139,20 +1139,25 @@ fn repack_dar_cmd(
                                         }
                                     }
                                 }
-                                if let Ok(raw_data) = repack_pkgdds_internal(&clean_dir, pkg_entries, &header_extra, orig_pkgdds_bytes.as_deref(), use_hash) {
-                                    size = raw_data.len() as u32;
-                                    if was_compressed {
-                                        if let Ok(comp) = compress_data(&raw_data) {
-                                            let comp_payload = &comp[4..];
-                                            zsize = comp_payload.len() as u32;
-                                            payload.extend_from_slice(comp_payload);
+                                match repack_pkgdds_internal(&clean_dir, pkg_entries, &header_extra, orig_pkgdds_bytes.as_deref(), use_hash) {
+                                    Ok(raw_data) => {
+                                        size = raw_data.len() as u32;
+                                        if was_compressed {
+                                            if let Ok(comp) = compress_data(&raw_data) {
+                                                let comp_payload = &comp[4..];
+                                                zsize = comp_payload.len() as u32;
+                                                payload.extend_from_slice(comp_payload);
+                                                payload_written = true;
+                                            } else {
+                                                eprintln!("Failed to compress PKGDDS {}", i);
+                                            }
+                                        } else {
+                                            zsize = 0;
+                                            payload.extend_from_slice(&raw_data);
                                             payload_written = true;
                                         }
-                                    } else {
-                                        zsize = 0;
-                                        payload.extend_from_slice(&raw_data);
-                                        payload_written = true;
                                     }
+                                    Err(e) => eprintln!("Error repacking PKGDDS {}: {}", i, e),
                                 }
                             }
                         }
@@ -1454,14 +1459,18 @@ fn repack_pkgdds_internal(
             let gtf_path = clean_dir.join(gtf_name);
 
             let mut orig_gtf_header = None;
+            let mut orig_payload = None;
             if let Some(orig_pkg) = orig_pkgdds_bytes {
                 if orig_pkg.len() >= 16 {
                     let entry_offset = (16 + i * 16) as usize;
                     if entry_offset + 8 <= orig_pkg.len() {
                         let offset = u32::from_le_bytes([orig_pkg[entry_offset], orig_pkg[entry_offset+1], orig_pkg[entry_offset+2], orig_pkg[entry_offset+3]]) as usize;
                         let size = u32::from_le_bytes([orig_pkg[entry_offset+4], orig_pkg[entry_offset+5], orig_pkg[entry_offset+6], orig_pkg[entry_offset+7]]) as usize;
-                        if offset + size <= orig_pkg.len() && size >= 128 {
-                            orig_gtf_header = Some(orig_pkg[offset..offset+128].to_vec());
+                        if offset + size <= orig_pkg.len() {
+                            orig_payload = Some(orig_pkg[offset..offset+size].to_vec());
+                            if size >= 128 {
+                                orig_gtf_header = Some(orig_pkg[offset..offset+128].to_vec());
+                            }
                         }
                     }
                 }
@@ -1497,6 +1506,8 @@ fn repack_pkgdds_internal(
                 convert_png_to_gtf(&actual_png_path, dds_format, orig_hdr, orig_gtf_header.as_deref()).map_err(|e| e.to_string())?
             } else if gtf_path.exists() {
                 fs::read(gtf_path).map_err(|e| e.to_string())?
+            } else if let Some(orig) = orig_payload {
+                orig
             } else {
                 return Err(format!("Missing clean texture PNG or raw GTF in: {:?}", clean_dir));
             };
@@ -1630,14 +1641,18 @@ fn repack_eg_internal(
     let gtf_path = clean_dir.join("eg_0.gtf");
 
     let mut orig_gtf_header = None;
+    let mut orig_payload = None;
     if let Some(orig) = orig_eg_bytes {
         if orig.len() >= 28 {
             let orig_files = u32::from_be_bytes([orig[24], orig[25], orig[26], orig[27]]) as usize;
             let orig_data_offset = u32::from_be_bytes([orig[20], orig[21], orig[22], orig[23]]) as usize;
             let orig_payload_offset = 28 + orig_files * 4 + orig_data_offset;
             let orig_eg_size = u32::from_be_bytes([orig[12], orig[13], orig[14], orig[15]]) as usize;
-            if orig_payload_offset + orig_eg_size <= orig.len() && orig_eg_size >= 128 {
-                orig_gtf_header = Some(orig[orig_payload_offset..orig_payload_offset+128].to_vec());
+            if orig_payload_offset + orig_eg_size <= orig.len() {
+                orig_payload = Some(orig[orig_payload_offset..orig_payload_offset+orig_eg_size].to_vec());
+                if orig_eg_size >= 128 {
+                    orig_gtf_header = Some(orig[orig_payload_offset..orig_payload_offset+128].to_vec());
+                }
             }
         }
     }
@@ -1692,6 +1707,8 @@ fn repack_eg_internal(
         convert_png_to_gtf(&actual_png_path, dds_format, orig_hdr, orig_gtf_header.as_deref())?
     } else if gtf_path.exists() {
         fs::read(gtf_path)?
+    } else if let Some(orig) = orig_payload {
+        orig
     } else {
         return Err(format!("Missing clean EG texture PNG or raw GTF in: {:?}", clean_dir).into());
     };
