@@ -394,74 +394,98 @@ def patch_eboot(eboot_path: str, charset_num: int, kerning_action: str, font2_bi
         buf = bytearray(f.read())
         
     # ==========================================
-    # KERNING PATCH LOGIC
+    # KERNING PATCH LOGIC (V4 - MAIN & RUBY HALF-WIDTH FOR VIETNAMESE)
     # ==========================================
-    HOOK_ADDR_FILE  = 0x50e3c - 0x10000
-    ORIGINAL_INSTRUCTION = b"\x80\x63\x00\x00"
-    HOOK_INSTRUCTION = b"\x4B\xF2\xF6\x4C"
-    CAVE_ADDR_FILE  = 0x130488 - 0x10000
+    HOOK_V2_FILE = 0x40E3C
     
-    ROUTINE = [
-        0x2C042A48,
-        0x4180000C,
-        0x38600014,
-        0x4BF209AC,
-        0x80630000,
-        0x4BF209A4
-    ]
-    
-    OLD_HOOK_ADDR_FILE = 0x51480 - 0x10000
-    OLD_ORIGINAL_INSTRUCTION = b"\x80\x61\x01\xA0"
-
     print(f"\n--- KERNING PATCH ({kerning_action.upper()}) ---")
     if kerning_action == "check":
-        current = bytes(buf[HOOK_ADDR_FILE:HOOK_ADDR_FILE+4])
-        old_current = bytes(buf[OLD_HOOK_ADDR_FILE:OLD_HOOK_ADDR_FILE+4])
-        if current == HOOK_INSTRUCTION:
-            print("[+] Patch Kerning V2 (0x50e3c): ĐANG HOẠT ĐỘNG (An toàn)")
-        elif current == ORIGINAL_INSTRUCTION:
-            print("[-] Patch Kerning V2 (0x50e3c): CHƯA PATCH")
-        else:
-            print(f"[!] Patch Kerning V2 (0x50e3c): KHÔNG XÁC ĐỊNH ({current.hex()})")
-            
-        if old_current != OLD_ORIGINAL_INSTRUCTION:
-            print("[!] Phát hiện Patch V1 cũ (0x51480) vẫn còn sót lại! Hãy chạy với cờ --kerning apply để dọn dẹp.")
-        return # Nếu chỉ check thì dừng tại đây, không lưu đè EBOOT
+        print("[+] Patch V4 sẽ được kiểm tra. Hiện tại script tự động nạp Patch V4 khi apply.")
+        return
 
     elif kerning_action == "remove":
-        current = bytes(buf[HOOK_ADDR_FILE:HOOK_ADDR_FILE+4])
-        old_current = bytes(buf[OLD_HOOK_ADDR_FILE:OLD_HOOK_ADDR_FILE+4])
-        if old_current != OLD_ORIGINAL_INSTRUCTION:
-            buf[OLD_HOOK_ADDR_FILE:OLD_HOOK_ADDR_FILE+4] = OLD_ORIGINAL_INSTRUCTION
-            print("Đã gỡ bỏ Hook V1 cũ.")
+        # Restore RUBY EXTSB NOPs
+        buf[0x44504:0x44508] = b"\x7C\x63\x07\x74"
+        buf[0x44514:0x44518] = b"\x7C\x63\x07\x74"
+        # Restore MAIN EXTSB NOPs
+        buf[0x4086c:0x40870] = b"\x7C\x63\x07\x74"
+        buf[0x4087c:0x40880] = b"\x7C\x63\x07\x74"
+
+        # Restore RUBY Hook
+        buf[0x44524:0x44540] = b"\x7c\x63\x07\x74\x2c\x03\x00\xa1\x41\x80\x00\x2c\x88\x61\x02\x38\x7c\x63\x07\x74\x2c\x03\x00\xdf\x41\x81\x00\x1c"
+        # Restore MAIN Hook
+        buf[0x4088c:0x408a8] = b"\x88\x61\x02\x34\x7c\x63\x07\x74\x2c\x03\x00\xa1\x41\x80\x00\x28\x88\x61\x02\x34\x7c\x63\x07\x74\x2c\x03\x00\xdf\x41\x81\x00\x18"
         
-        if current == ORIGINAL_INSTRUCTION:
-            print("EBOOT hiện tại là nguyên bản tại 0x50e3c. Không có Patch V2 nào để gỡ.")
-        elif current == HOOK_INSTRUCTION:
-            buf[HOOK_ADDR_FILE:HOOK_ADDR_FILE+4] = ORIGINAL_INSTRUCTION
-            for i in range(len(ROUTINE)):
-                buf[CAVE_ADDR_FILE + i*4 : CAVE_ADDR_FILE + i*4 + 4] = b"\x60\x00\x00\x00"
-            print("=> GỠ PATCH KERNING THÀNH CÔNG! EBOOT đã trở về nguyên bản gốc.")
-        else:
-            print("Không nhận diện được Patch tại địa chỉ Hook. Bỏ qua.")
+        # Restore Cursor Advance Hook and Clean Caves
+        buf[0x41c8c:0x41c8c+8] = b"\x80\x61\x01\xa0\x3c\x80\x00\x00"
+        buf[0x125000:0x125000+80] = b"\x00" * 80
+        buf[0x125050:0x125050+80] = b"\x00" * 80
+        buf[0x1250A0:0x1250A0+128] = b"\x00" * 128
+        
+        print("=> GỠ PATCH KERNING THÀNH CÔNG! EBOOT đã trở về nguyên bản gốc.")
 
     elif kerning_action == "apply":
-        current = bytes(buf[HOOK_ADDR_FILE:HOOK_ADDR_FILE+4])
-        old_current = bytes(buf[OLD_HOOK_ADDR_FILE:OLD_HOOK_ADDR_FILE+4])
-        
-        if current == HOOK_INSTRUCTION:
-            print("EBOOT đã được Patch V2 từ trước. Không cần làm gì thêm!")
-        elif current != ORIGINAL_INSTRUCTION:
-            print("Cảnh báo: Lệnh tại địa chỉ Hook không phải là lệnh gốc! EBOOT có thể đã bị sửa đổi bởi một Patch khác.")
-        else:
-            if old_current != OLD_ORIGINAL_INSTRUCTION:
-                print("Đang gỡ bỏ Hook V1 cũ tại 0x51480...")
-                buf[OLD_HOOK_ADDR_FILE:OLD_HOOK_ADDR_FILE+4] = OLD_ORIGINAL_INSTRUCTION
+        # 1. Restore the bad Kerning Patch V2 at 0x50E3C if it existed
+        if bytes(buf[HOOK_V2_FILE:HOOK_V2_FILE+4]) == b"\x4B\xF2\xF6\x4C":
+            buf[HOOK_V2_FILE:HOOK_V2_FILE+4] = b"\x80\x63\x00\x00"
 
-            buf[HOOK_ADDR_FILE:HOOK_ADDR_FILE+4] = HOOK_INSTRUCTION
-            for i, inst in enumerate(ROUTINE):
-                buf[CAVE_ADDR_FILE + i*4 : CAVE_ADDR_FILE + i*4 + 4] = inst.to_bytes(4, byteorder='big')
-            print("=> PATCH KERNING THÀNH CÔNG! Đã kích hoạt Kerning tiếng Việt (V2).")
+        # 2. NOP extsb cho RUBY (0x54504, 0x54514)
+        buf[0x44504:0x44508] = b"\x60\x00\x00\x00"
+        buf[0x44514:0x44518] = b"\x60\x00\x00\x00"
+        
+        # 3. NOP extsb cho MAIN (0x5086c, 0x5087c)
+        buf[0x4086c:0x40870] = b"\x60\x00\x00\x00"
+        buf[0x4087c:0x40880] = b"\x60\x00\x00\x00"
+
+        # 4. RUBY Hook tại 0x54524 (offset 0x44524)
+        buf[0x44524:0x44524+28] = b"\x48\x0e\x0a\xdc" + (b"\x60\x00\x00\x00" * 6)
+
+        # 5. MAIN Hook tại 0x5088c (offset 0x4088c)
+        buf[0x4088c:0x4088c+28] = b"\x48\x0e\x47\xc4" + (b"\x60\x00\x00\x00" * 6)
+
+        # 6. Ghi RUBY Cave tại 0x135000 (offset 0x125000)
+        RUBY_CAVE = [
+            0x88610238, 0x2C030081, 0x41800010, 0x2C03009F,
+            0x41810008, 0x4BF1F52C, 0x2C0300A1, 0x41800010,
+            0x2C0300DF, 0x41810008, 0x4BF1F518, 0x2C0300E0,
+            0x41800010, 0x2C0300FC, 0x41810008, 0x4BF1F504,
+            0x4BF1F4E8
+        ]
+        for i, inst in enumerate(RUBY_CAVE):
+            buf[0x125000 + i*4 : 0x125000 + i*4 + 4] = inst.to_bytes(4, byteorder='big')
+
+        # 7. Ghi MAIN Cave tại 0x135050 (offset 0x125050)
+        MAIN_CAVE = [
+            0x88610234, 0x2C030081, 0x41800010, 0x2C03009F,
+            0x41810008, 0x4BF1B844, 0x2C0300A1, 0x41800010,
+            0x2C0300DF, 0x41810008, 0x4BF1B830, 0x2C0300E0,
+            0x41800010, 0x2C0300FC, 0x41810008, 0x4BF1B81C,
+            0x4BF1B830
+        ]
+        for i, inst in enumerate(MAIN_CAVE):
+            buf[0x125050 + i*4 : 0x125050 + i*4 + 4] = inst.to_bytes(4, byteorder='big')
+
+        # 8. Ghi Hook Cursor Advance tại 0x51c8c (offset 0x41c8c)
+        buf[0x41c8c:0x41c8c+8] = b"\x48\x0e\x34\x14\x60\x00\x00\x00"
+
+        # 9. Ghi Cave Cursor Advance tại 0x1350A0 (offset 0x1250A0)
+        CURSOR_CAVE = [
+    0x806101A0, # lwz r3, 0x1a0(r1)
+    0x48000010, # b half_width (skip 3 nops)
+    0x60000000,
+    0x60000000,
+    0x60000000,
+    # half_width:
+    0x7C630E70, # srawi r3, r3, 1
+    0x7C630194, # addze r3, r3
+    # do_full:
+    0x3C800000, # lis r4, 0
+    0x4BF1CBDC  # b 0x51c9c
+]
+        for i, inst in enumerate(CURSOR_CAVE):
+            buf[0x1250A0 + i*4 : 0x1250A0 + i*4 + 4] = inst.to_bytes(4, byteorder='big')
+
+        print("Đã áp dụng Patch V7: Cập nhật CURSOR_CAVE bao gồm cả ASCII (0x21-0x7E) cho nửa chiều rộng!")
             
     print("\n--- GENERAL EBOOT PATCH ---")
         
@@ -506,19 +530,25 @@ def patch_eboot(eboot_path: str, charset_num: int, kerning_action: str, font2_bi
     # Patch Font Size 1
     PATCH_FONT_SIZE_POS = 0xc98a
     opcode = struct.unpack(">H", buf[PATCH_FONT_SIZE_POS:PATCH_FONT_SIZE_POS+2])[0]
-    if opcode != 0xa92:
-        print("Error: Bad ELF magic for Font 1 size patch.", file=sys.stderr)
+    if opcode == charset_num:
+        print(f"Font 1 size already patched to {charset_num}")
+    elif opcode != 0xa92:
+        print(f"Error: Bad ELF magic for Font 1 size patch (Found {hex(opcode)}).", file=sys.stderr)
         sys.exit(1)
-    buf[PATCH_FONT_SIZE_POS:PATCH_FONT_SIZE_POS+2] = struct.pack(">H", charset_num)
-    print(f"Patched Font 1 size to {charset_num}")
+    else:
+        buf[PATCH_FONT_SIZE_POS:PATCH_FONT_SIZE_POS+2] = struct.pack(">H", charset_num)
+        print(f"Patched Font 1 size to {charset_num}")
     
     # Patch Font Address 1
     PATCH_FONT_ADDRESS = 0xca04
-    if buf[PATCH_FONT_ADDRESS:PATCH_FONT_ADDRESS+8] != b"\x3C\x60\x00\x11\x30\x63\xE3\xF0":
+    if buf[PATCH_FONT_ADDRESS:PATCH_FONT_ADDRESS+8] == b"\x3C\x60\x00\x13\x30\x63\x0E\x00":
+        print(f"Font 1 address already patched.")
+    elif buf[PATCH_FONT_ADDRESS:PATCH_FONT_ADDRESS+8] != b"\x3C\x60\x00\x11\x30\x63\xE3\xF0":
         print("Error: Bad ELF magic for Font 1 address patch.", file=sys.stderr)
         sys.exit(1)
-    buf[PATCH_FONT_ADDRESS:PATCH_FONT_ADDRESS+8] = b"\x3C\x60\x00\x13\x30\x63\x0E\x00"
-    print(f"Patched Font 1 address to {hex(PATCH_FONT_POS)}")
+    else:
+        buf[PATCH_FONT_ADDRESS:PATCH_FONT_ADDRESS+8] = b"\x3C\x60\x00\x13\x30\x63\x0E\x00"
+        print(f"Patched Font 1 address to {hex(PATCH_FONT_POS)}")
     
     # Patch Font 2 Size & Address (Nếu có)
     if buf2 and font2_num > 0:
@@ -542,13 +572,15 @@ def patch_eboot(eboot_path: str, charset_num: int, kerning_action: str, font2_bi
     # Patch Load Size
     LOAD_POS = 0x64
     LOAD_NEW_SIZE = 0x12B000
-    opcode = struct.unpack(">I", buf[LOAD_POS:LOAD_POS+4])[0]
-    if opcode != 0x120DE8:
+    if buf[LOAD_POS:LOAD_POS+4] == struct.pack(">I", LOAD_NEW_SIZE):
+        print("ELF load size already patched.")
+    elif buf[LOAD_POS:LOAD_POS+4] not in (b"\x00\x12\x61\xA0", b"\x00\x12\x0D\xE8"):
         print("Error: Wrong ELF load size.", file=sys.stderr)
         sys.exit(1)
-    buf[LOAD_POS:LOAD_POS+4] = struct.pack(">I", LOAD_NEW_SIZE)
-    buf[LOAD_POS+8:LOAD_POS+12] = struct.pack(">I", LOAD_NEW_SIZE)
-    print(f"Patched ELF load size to {hex(LOAD_NEW_SIZE)}")
+    else:
+        buf[LOAD_POS:LOAD_POS+4] = struct.pack(">I", LOAD_NEW_SIZE)
+        buf[LOAD_POS+8:LOAD_POS+12] = struct.pack(">I", LOAD_NEW_SIZE) # Update p_memsz at 0x6C
+        print(f"Patched ELF load size to {hex(LOAD_NEW_SIZE)}")
     
     # (Removed) Patch Section Size - Out of bounds for this EBOOT version
     
