@@ -596,24 +596,61 @@ def patch_eboot(eboot_path: str, charset_num: int, kerning_action: str, font2_bi
         c[21] = b_abs(cursor_base + 21*4, cursor_base + 22*4)
         write_words(0x1250A0, c)
 
-        # 4) Backlog Cursor advance hook
+        # 4) Backlog cursor advance hook, VN-only.
+        # The previous test cave halved 0x1a4(r1) and stack[0x4fc] unconditionally.
+        # That makes every backlog glyph half-width, including normal Japanese.
+        # Here we mirror the MAIN cursor check but use backlog's script index 0x194.
+        # At this point the current two-byte glyph's lead byte is normally input[0x194 - 1].
         buf[0x458d4:0x458d4+4] = struct.pack(">I", b_abs(0x558D4, 0x135120))
         bl_base = 0x135120
 
-        c2 = [0] * 9
-        c2[0] = lwz(3, 1, 0x1a4)                   # r3 = local_2fc (font size)
-        c2[1] = 0x7C630E70                         # srawi r3, r3, 1
-        c2[2] = 0x7C630194                         # addze r3, r3
-        c2[3] = lis(4, 0)
-        c2[4] = addic(4, 4, 0x4fc)
-        c2[5] = lwzx(4, 1, 4)                      # r4 = param_6
-        c2[6] = 0x7C840E70                         # srawi r4, r4, 1
-        c2[7] = 0x7C840194                         # addze r4, r4
-        c2[8] = b_abs(bl_base + 8*4, 0x558e4)      # return to addc r3, r3, r4
+        # Labels by index:
+        #   17 check_f0, 22 do_half, 31 do_orig
+        c2 = [0] * 33
+        c2[0]  = lwz(6, 1, 0x194)                  # r6 = backlog script index
+        c2[1]  = cmpwi(6, 0)                       # avoid index - 1 at start of string
+        c2[2]  = 0                                  # ble do_orig
+        c2[3]  = addi(6, 6, -1)                    # r6 = lead-byte index for current glyph
+        c2[4]  = lis(7, 0)
+        c2[5]  = addic(7, 7, 0x52c)
+        c2[6]  = lwzx(7, 1, 7)                     # r7 = input/script pointer from stack[0x52c]
+        c2[7]  = lbzx(5, 7, 6)                     # r5 = lead byte
+        c2[8]  = cmpwi(5, 0xF0)
+        c2[9]  = 0                                  # beq check_f0
+        c2[10] = cmpwi(5, 0xF1)
+        c2[11] = 0                                  # bne do_orig
+        c2[12] = addi(6, 6, 1)                     # F1 low-byte index
+        c2[13] = lbzx(5, 7, 6)
+        c2[14] = cmpwi(5, 0x06)                    # F100..F106
+        c2[15] = 0                                  # ble do_half
+        c2[16] = 0                                  # b do_orig
+        c2[17] = addi(6, 6, 1)                     # check_f0: low-byte index
+        c2[18] = lbzx(5, 7, 6)
+        c2[19] = cmpwi(5, 0x74)                    # F074..F0FF
+        c2[20] = 0                                  # blt do_orig
+        c2[21] = 0                                  # b do_half
+        c2[22] = lwz(3, 1, 0x1a4)                  # do_half: local font/advance
+        c2[23] = 0x7C630E70                         # srawi r3, r3, 1
+        c2[24] = 0x7C630194                         # addze r3, r3
+        c2[25] = lis(4, 0)
+        c2[26] = addic(4, 4, 0x4fc)
+        c2[27] = lwzx(4, 1, 4)                      # r4 = param_6
+        c2[28] = 0x7C840E70                         # srawi r4, r4, 1
+        c2[29] = 0x7C840194                         # addze r4, r4
+        c2[30] = b_abs(bl_base + 30*4, 0x558e4)     # return to addc r3, r3, r4
+        c2[31] = lwz(3, 1, 0x1a4)                  # do_orig: restore overwritten original instruction
+        c2[32] = b_abs(bl_base + 32*4, 0x558d8)     # continue original sequence
+        c2[2]  = bc_local(bl_base, BLE, 2, 31)
+        c2[9]  = bc_local(bl_base, BEQ, 9, 17)
+        c2[11] = bc_local(bl_base, BNE, 11, 31)
+        c2[15] = bc_local(bl_base, BLE, 15, 22)
+        c2[16] = b_abs(bl_base + 16*4, bl_base + 31*4)
+        c2[20] = bc_local(bl_base, BLT, 20, 31)
+        c2[21] = b_abs(bl_base + 21*4, bl_base + 22*4)
         
         write_words(0x125120, c2)
 
-        print("Đã áp dụng VN-only kerning: Cả MAIN DIALOG và BACKLOG đều hiển thị half-width đúng chuẩn!")
+        print("Đã áp dụng VN-only kerning: MAIN DIALOG và BACKLOG chỉ half-width mã tiếng Việt custom.")
             
     print("\n--- GENERAL EBOOT PATCH ---")
         
