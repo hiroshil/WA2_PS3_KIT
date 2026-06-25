@@ -5,6 +5,7 @@ import struct
 import json
 import argparse
 import codecs
+import hashlib
 from utils import wa2_elzma
 
 EBOOT_OFFSET = 0x10000
@@ -15,7 +16,7 @@ YINFU_UNICODE = '\u266a' # Music char
 # Extract EBOOT Command
 # ==============================================================================
 
-def extract_eboot(eboot_path: str, output_dir: str, clean_only: bool = False):
+def extract_eboot(eboot_path: str, output_dir: str, clean_only: bool = False, use_hash: bool = False):
     print(f"Extracting EBOOT: {eboot_path} to {output_dir}")
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -91,14 +92,22 @@ def extract_eboot(eboot_path: str, output_dir: str, clean_only: bool = False):
         raw_path = os.path.join(output_dir, norm_name)
         with open(raw_path, "wb") as f:
             f.write(uncomp_data)
+            
+        file_hash = None
+        if use_hash and not clean_only:
+            file_hash = hashlib.md5(uncomp_data).hexdigest()
         
         # Clean mode for TXT files
         if clean_only and is_txt:
             # Convert to UTF-16
             text = map_sjis_to_vietnamese(uncomp_data)
             out_path = os.path.join(eboot_dir, norm_name)
-            with codecs.open(out_path, "w", encoding="utf-16") as out_f:
-                out_f.write(text)
+            # Use strict utf-16 with BOM so it matches python's encoding exactly
+            encoded_text = text.encode("utf-16")
+            with open(out_path, "wb") as out_f:
+                out_f.write(encoded_text)
+            if use_hash:
+                file_hash = hashlib.md5(encoded_text).hexdigest()
                     
         meta_entries.append({
             "name": name,
@@ -106,7 +115,8 @@ def extract_eboot(eboot_path: str, output_dir: str, clean_only: bool = False):
             "uncomp_size": uncomp_size,
             "block_size": block_size,
             "data_offset": data_offset,
-            "name_offset": name_offset
+            "name_offset": name_offset,
+            "original_hash": file_hash
         })
         
         pos += 16
@@ -215,7 +225,7 @@ def map_sjis_to_vietnamese(sjis_bytes: bytes) -> str:
             i += 1
     return "".join(out)
 
-def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
+def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str, use_hash: bool = False):
     print(f"Injecting into EBOOT: {out_eboot} from template {in_eboot} with files from {input_dir}")
     
     meta_path = os.path.join(input_dir, "eboot_meta.json")
@@ -284,60 +294,73 @@ def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
         if clean_mode and norm_name.endswith(".txt") and os.path.exists(mod_txt_path):
             with open(mod_txt_path, "rb") as f:
                 mod_data = f.read()
-            if mod_data.startswith(b'\xff\xfe'):
-                text_content = mod_data.decode("utf-16-le")
-            elif mod_data.startswith(b'\xfe\xff'):
-                text_content = mod_data.decode("utf-16-be")
-            elif mod_data.startswith(b'\xef\xbb\xbf'):
-                text_content = mod_data.decode("utf-8-sig")
-            else:
-                try:
-                    text_content = mod_data.decode("utf-8")
-                except UnicodeDecodeError:
-                    text_content = mod_data.decode("cp932", errors="replace")
-            # Replace custom music note unicode
-            text_content = text_content.replace('\u4f93', '♪')
+                
+            skip_file = False
+            if use_hash and "original_hash" in file_info and file_info["original_hash"]:
+                if hashlib.md5(mod_data).hexdigest() == file_info["original_hash"]:
+                    skip_file = True
             
-            # KIỂM TRA TÍNH TƯƠNG THÍCH DELIMITER
-            if text_content and delimiter_patched:
-                if text_content[0] == ',':
-                    print(f"\n[LỖI NGHIÊM TRỌNG] Kịch bản '{norm_name}' dùng dấu ',' làm ngắt dòng, nhưng EBOOT yêu cầu '{chr(eboot_delimiter)}'. Kịch bản không tương thích!")
-                    sys.exit(1)
-                # Thay '\,' bằng ','
-                text_content = text_content.replace(r'\,', ',')
-            
-            mapped_bytes = map_vietnamese_to_sjis(text_content)
-            
-            new_uncomp = len(mapped_bytes)
-            # Compress
-            comp_data = wa2_elzma.compress_data(mapped_bytes)
-            payload = comp_data[4:] # Strip 4-byte prefix
-            new_comp = len(payload)
-            
-            eboot_buf[cur_pos:cur_pos+new_comp] = payload
-            payload_written = True
-            print(f"Injecting modified text: {norm_name} ({orig_uncomp}->{new_uncomp} bytes)")
+            if not skip_file:
+                if mod_data.startswith(b'\xff\xfe'):
+                    text_content = mod_data.decode("utf-16-le")
+                elif mod_data.startswith(b'\xfe\xff'):
+                    text_content = mod_data.decode("utf-16-be")
+                elif mod_data.startswith(b'\xef\xbb\xbf'):
+                    text_content = mod_data.decode("utf-8-sig")
+                else:
+                    try:
+                        text_content = mod_data.decode("utf-8")
+                    except UnicodeDecodeError:
+                        text_content = mod_data.decode("cp932", errors="replace")
+                # Replace custom music note unicode
+                text_content = text_content.replace('\u4f93', '♪')
+                
+                # KIỂM TRA TÍNH TƯƠNG THÍCH DELIMITER
+                if text_content and delimiter_patched:
+                    if text_content[0] == ',':
+                        print(f"\n[LỖI NGHIÊM TRỌNG] Kịch bản '{norm_name}' dùng dấu ',' làm ngắt dòng, nhưng EBOOT yêu cầu '{chr(eboot_delimiter)}'. Kịch bản không tương thích!")
+                        sys.exit(1)
+                    # Thay '\,' bằng ','
+                    text_content = text_content.replace(r'\,', ',')
+                
+                mapped_bytes = map_vietnamese_to_sjis(text_content)
+                
+                new_uncomp = len(mapped_bytes)
+                # Compress
+                comp_data = wa2_elzma.compress_data(mapped_bytes)
+                payload = comp_data[4:] # Strip 4-byte prefix
+                new_comp = len(payload)
+                
+                eboot_buf[cur_pos:cur_pos+new_comp] = payload
+                payload_written = True
+                print(f"Injecting modified text: {norm_name} ({orig_uncomp}->{new_uncomp} bytes)")
             
         # 2. Try raw mode modified decompressed file
         elif not clean_mode and os.path.exists(mod_raw_path):
             with open(mod_raw_path, "rb") as f:
                 raw_data = f.read()
                 
-            if norm_name.endswith(".txt") and delimiter_patched and len(raw_data) > 0:
-                if raw_data[0] == 0x2C: # Dấu ','
-                    print(f"\n[LỖI NGHIÊM TRỌNG] Kịch bản thô '{norm_name}' dùng dấu ',' làm ngắt dòng, nhưng EBOOT yêu cầu '{chr(eboot_delimiter)}'. Kịch bản không tương thích!")
-                    sys.exit(1)
-                # Thay b'\,' bằng b','
-                raw_data = raw_data.replace(b'\\,', b',')
+            skip_file = False
+            if use_hash and "original_hash" in file_info and file_info["original_hash"]:
+                if hashlib.md5(raw_data).hexdigest() == file_info["original_hash"]:
+                    skip_file = True
+                    
+            if not skip_file:
+                if norm_name.endswith(".txt") and delimiter_patched and len(raw_data) > 0:
+                    if raw_data[0] == 0x2C: # Dấu ','
+                        print(f"\n[LỖI NGHIÊM TRỌNG] Kịch bản thô '{norm_name}' dùng dấu ',' làm ngắt dòng, nhưng EBOOT yêu cầu '{chr(eboot_delimiter)}'. Kịch bản không tương thích!")
+                        sys.exit(1)
+                    # Thay b'\,' bằng b','
+                    raw_data = raw_data.replace(b'\\,', b',')
+                    
+                new_uncomp = len(raw_data)
+                comp_data = wa2_elzma.compress_data(raw_data)
+                payload = comp_data[4:] # Strip 4-byte prefix
+                new_comp = len(payload)
                 
-            new_uncomp = len(raw_data)
-            comp_data = wa2_elzma.compress_data(raw_data)
-            payload = comp_data[4:] # Strip 4-byte prefix
-            new_comp = len(payload)
-            
-            eboot_buf[cur_pos:cur_pos+new_comp] = payload
-            payload_written = True
-            print(f"Injecting raw modified file: {norm_name} ({orig_uncomp}->{new_uncomp} uncompressed bytes)")
+                eboot_buf[cur_pos:cur_pos+new_comp] = payload
+                payload_written = True
+                print(f"Injecting raw modified file: {norm_name} ({orig_uncomp}->{new_uncomp} uncompressed bytes)")
             
         # 3. Fallback: Copy original compressed payload from EBOOT.ELF itself
         if not payload_written:
@@ -346,7 +369,7 @@ def inject_eboot(in_eboot: str, out_eboot: str, input_dir: str):
             
             # Nâng cấp các file TXT cũ ở Fallback để tránh Crash nếu EBOOT đã đổi Delimiter
             if norm_name.endswith(".txt") and delimiter_patched:
-                uncomp_data = wa2_elzma.decompress_data(payload, orig_uncomp)
+                uncomp_data = wa2_elzma.decompress_data(payload)
                 if len(uncomp_data) > 0 and uncomp_data[0] == 0x2C:
                     uncomp_data = uncomp_data.replace(b',', bytes([eboot_delimiter]))
                     comp_data = wa2_elzma.compress_data(uncomp_data)
@@ -782,12 +805,14 @@ def main():
     ext_parser.add_argument("eboot_file", help="Path to EBOOT.ELF")
     ext_parser.add_argument("output_dir", help="Output directory")
     ext_parser.add_argument("--clean", action="store_true", help="Extract in clean translation mode (only dialogue TXT files)")
+    ext_parser.add_argument("--use-hash", action="store_true", help="Calculate hashes for files to enable skipping unmodified files on injection")
     
     # inject
     inj_parser = subparsers.add_parser("inject", help="Inject modified files back into EBOOT.ELF")
     inj_parser.add_argument("in_eboot", help="Path to input original EBOOT.ELF template")
     inj_parser.add_argument("out_eboot", help="Path to output modified EBOOT.ELF")
     inj_parser.add_argument("input_dir", help="Directory containing modified files")
+    inj_parser.add_argument("--use-hash", action="store_true", help="Skip injection for files whose hash matches the original extracted hash")
     
     # patch
     pat_parser = subparsers.add_parser("patch", help="Patch EBOOT.ELF font, warning data, and kerning")
@@ -802,9 +827,9 @@ def main():
     args = parser.parse_args()
     
     if args.command == "extract":
-        extract_eboot(args.eboot_file, args.output_dir, args.clean)
+        extract_eboot(args.eboot_file, args.output_dir, args.clean, args.use_hash)
     elif args.command == "inject":
-        inject_eboot(args.in_eboot, args.out_eboot, args.input_dir)
+        inject_eboot(args.in_eboot, args.out_eboot, args.input_dir, args.use_hash)
     elif args.command == "patch":
         patch_eboot(args.eboot_file, args.charset, args.kerning, args.font2_bin, args.font2_num, args.warning_png, args.out_eboot)
 
