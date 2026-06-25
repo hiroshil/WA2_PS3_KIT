@@ -423,6 +423,8 @@ def patch_eboot(eboot_path: str, charset_num: int, kerning_action: str, font2_bi
         buf[0x125000:0x125000+0x100] = b"\x00" * 0x100
         buf[0x125050:0x125050+0x100] = b"\x00" * 0x100
         buf[0x1250A0:0x1250A0+0x100] = b"\x00" * 0x100
+        buf[0x458d4:0x458d4+4] = b"\x80\x61\x01\xA4"
+        buf[0x125120:0x125120+0x100] = b"\x00" * 0x100
         
         print("=> GỠ PATCH KERNING THÀNH CÔNG! EBOOT đã trở về nguyên bản gốc.")
 
@@ -594,7 +596,24 @@ def patch_eboot(eboot_path: str, charset_num: int, kerning_action: str, font2_bi
         c[21] = b_abs(cursor_base + 21*4, cursor_base + 22*4)
         write_words(0x1250A0, c)
 
-        print("Đã áp dụng VN-only kerning: Japanese giữ width gốc; mã Việt 0xF074..0xF106 mới half-width.")
+        # 4) Backlog Cursor advance hook
+        buf[0x458d4:0x458d4+4] = struct.pack(">I", b_abs(0x558D4, 0x135120))
+        bl_base = 0x135120
+
+        c2 = [0] * 9
+        c2[0] = lwz(3, 1, 0x1a4)                   # r3 = local_2fc (font size)
+        c2[1] = 0x7C630E70                         # srawi r3, r3, 1
+        c2[2] = 0x7C630194                         # addze r3, r3
+        c2[3] = lis(4, 0)
+        c2[4] = addic(4, 4, 0x4fc)
+        c2[5] = lwzx(4, 1, 4)                      # r4 = param_6
+        c2[6] = 0x7C840E70                         # srawi r4, r4, 1
+        c2[7] = 0x7C840194                         # addze r4, r4
+        c2[8] = b_abs(bl_base + 8*4, 0x558e4)      # return to addc r3, r3, r4
+        
+        write_words(0x125120, c2)
+
+        print("Đã áp dụng VN-only kerning: Cả MAIN DIALOG và BACKLOG đều hiển thị half-width đúng chuẩn!")
             
     print("\n--- GENERAL EBOOT PATCH ---")
         
